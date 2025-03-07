@@ -3,13 +3,14 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/internal/core/routing"
-	"github.com/penwyp/mini-gateway/internal/core/security" // 更新路径
+	"github.com/penwyp/mini-gateway/internal/core/security"
 	"github.com/penwyp/mini-gateway/internal/middleware"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 )
@@ -33,6 +34,11 @@ func main() {
 		Compress:   cfg.Logger.Compress,
 	})
 
+	if cfg.Routing.LoadBalancer != "consul" && (cfg.Routing.Rules == nil || len(cfg.Routing.Rules) == 0) {
+		logger.Error("Routing rules are empty or not defined in configuration")
+		os.Exit(1)
+	}
+
 	logger.Info("Gateway starting",
 		zap.String("port", cfg.Server.Port),
 		zap.String("configPath", "config/config.yaml"),
@@ -40,13 +46,13 @@ func main() {
 		zap.String("buildTime", BuildTime),
 		zap.String("gitCommit", GitCommit),
 		zap.String("goVersion", GoVersion),
+		zap.Any("routingRules", cfg.Routing.Rules),
 	)
 
 	r := gin.Default()
 	r.Use(middleware.Auth(), middleware.RateLimit())
 	routing.Setup(r, cfg)
 
-	// 添加登录接口
 	r.POST("/login", func(c *gin.Context) {
 		var creds struct {
 			Username string `json:"username" binding:"required"`
@@ -58,7 +64,6 @@ func main() {
 			return
 		}
 
-		// 简单验证（示例，实际应使用数据库）
 		if creds.Username != "admin" || creds.Password != "password" {
 			logger.Warn("Login failed",
 				zap.String("username", creds.Username),
@@ -67,7 +72,6 @@ func main() {
 			return
 		}
 
-		// 生成 JWT
 		token, err := security.GenerateToken(creds.Username)
 		if err != nil {
 			logger.Error("Failed to generate token", zap.Error(err))

@@ -2,9 +2,16 @@ server:
   port: "8080"
 routing:
   rules:
-    "/api/v1/user": "http://localhost:8081/user/"
-    "/api/v1/order": "http://localhost:8082/order/"
-  engine: "trie-regexp"
+    "/api/v1/user":
+      - target: "http://localhost:8081"
+        weight: 4
+      - target: "http://localhost:8083"
+        weight: 2
+    "/api/v1/order":
+      - target: "http://localhost:8082"
+        weight: 1
+  engine: "gin"
+  loadBalancer: "consul"
 security:
   jwt:
     secret: "change-to-your-secret-key"

@@ -12,49 +12,73 @@ import (
 
 // Config 定义网关的配置结构体，新增 Logger 配置
 type Config struct {
-	Server struct {
-		Port string `mapstructure:"port"` // 服务监听端口
-	} `mapstructure:"server"`
-	Routing struct {
-		Rules  map[string]string `mapstructure:"rules"`  // 动态路由规则
-		Engine string            `mapstructure:"engine"` // 路由引擎：gin 或 trie
-	} `mapstructure:"routing"`
-	Security struct {
-		JWT struct {
-			Secret    string `mapstructure:"secret"`    // JWT 密钥
-			ExpiresIn int    `mapstructure:"expiresIn"` // JWT 过期时间（秒）
-			Enabled   bool   `mapstructure:"enabled"`   // 是否启用 JWT
-		} `mapstructure:"jwt"`
-		IPBlacklist []string `mapstructure:"ipBlacklist"` // IP 黑名单
-		IPWhitelist []string `mapstructure:"ipWhitelist"` // IP 白名单
-	} `mapstructure:"security"`
-	Traffic struct {
-		RateLimit struct {
-			Enabled bool `mapstructure:"enabled"` // 是否启用限流
-			QPS     int  `mapstructure:"qps"`     // 每秒请求数限制
-			Burst   int  `mapstructure:"burst"`   // 令牌桶突发容量
-		} `mapstructure:"rateLimit"`
-		Breaker struct {
-			Enabled   bool    `mapstructure:"enabled"`   // 是否启用熔断
-			ErrorRate float64 `mapstructure:"errorRate"` // 错误率阈值
-			Timeout   int     `mapstructure:"timeout"`   // 超时时间（秒）
-		} `mapstructure:"breaker"`
-	} `mapstructure:"traffic"`
-	Observability struct {
-		Prometheus struct {
-			Enabled bool   `mapstructure:"enabled"` // 是否启用 Prometheus
-			Path    string `mapstructure:"path"`    // 指标暴露路径
-		} `mapstructure:"prometheus"`
-	} `mapstructure:"observability"`
-	Plugins []string `mapstructure:"plugins"` // 插件列表
-	Logger  struct {
-		Level      string `mapstructure:"level"`      // 日志级别 (debug, info, warn, error)
-		FilePath   string `mapstructure:"filePath"`   // 日志文件路径
-		MaxSize    int    `mapstructure:"maxSize"`    // 单个日志文件最大大小 (MB)
-		MaxBackups int    `mapstructure:"maxBackups"` // 保留的旧日志文件数
-		MaxAge     int    `mapstructure:"maxAge"`     // 日志文件保留天数
-		Compress   bool   `mapstructure:"compress"`   // 是否压缩旧日志文件
-	} `mapstructure:"logger"` // 新增日志配置
+	Server        Server        `mapstructure:"server"`
+	Routing       Routing       `mapstructure:"routing"`
+	Security      Security      `mapstructure:"security"`
+	Traffic       Traffic       `mapstructure:"traffic"`
+	Observability Observability `mapstructure:"observability"`
+	Plugins       []string      `mapstructure:"plugins"` // 插件列表
+	Logger        Logger        `mapstructure:"logger"`  // 新增日志配置
+}
+
+type RoutingRules []RoutingRule
+type RoutingRule struct {
+	Target string `mapstructure:"target"`
+	Weight int    `mapstructure:"weight"`
+}
+
+type Routing struct {
+	Rules        map[string]RoutingRules `mapstructure:"rules"`
+	Engine       string                  `mapstructure:"engine"`
+	LoadBalancer string                  `mapstructure:"loadBalancer"`
+}
+
+type Server struct {
+	Port string `mapstructure:"port"` // 服务监听端口
+}
+
+type JWT struct {
+	Secret    string `mapstructure:"secret"`    // JWT 密钥
+	ExpiresIn int    `mapstructure:"expiresIn"` // JWT 过期时间（秒）
+	Enabled   bool   `mapstructure:"enabled"`   // 是否启用 JWT
+}
+
+type Security struct {
+	JWT         JWT      `mapstructure:"jwt"`
+	IPBlacklist []string `mapstructure:"ipBlacklist"` // IP 黑名单
+	IPWhitelist []string `mapstructure:"ipWhitelist"` // IP 白名单
+}
+type TrafficRateLimit struct {
+	Enabled bool `mapstructure:"enabled"` // 是否启用限流
+	QPS     int  `mapstructure:"qps"`     // 每秒请求数限制
+	Burst   int  `mapstructure:"burst"`   // 令牌桶突发容量
+}
+
+type TrafficBreaker struct {
+	Enabled   bool    `mapstructure:"enabled"`   // 是否启用熔断
+	ErrorRate float64 `mapstructure:"errorRate"` // 错误率阈值
+	Timeout   int     `mapstructure:"timeout"`   // 超时时间（秒）
+}
+
+type Traffic struct {
+	RateLimit TrafficRateLimit `mapstructure:"rateLimit"`
+	Breaker   TrafficBreaker   `mapstructure:"breaker"`
+}
+
+type Observability struct {
+	Prometheus struct {
+		Enabled bool   `mapstructure:"enabled"` // 是否启用 Prometheus
+		Path    string `mapstructure:"path"`    // 指标暴露路径
+	} `mapstructure:"prometheus"`
+}
+
+type Logger struct {
+	Level      string `mapstructure:"level"`      // 日志级别 (debug, info, warn, error)
+	FilePath   string `mapstructure:"filePath"`   // 日志文件路径
+	MaxSize    int    `mapstructure:"maxSize"`    // 单个日志文件最大大小 (MB)
+	MaxBackups int    `mapstructure:"maxBackups"` // 保留的旧日志文件数
+	MaxAge     int    `mapstructure:"maxAge"`     // 日志文件保留天数
+	Compress   bool   `mapstructure:"compress"`   // 是否压缩旧日志文件
 }
 
 // configInstance 用于存储全局配置实例
@@ -120,7 +144,8 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("server.port", "8080")
 
 	// Routing
-	v.SetDefault("routing.engine", "gin") // 默认使用 Gin 路由
+	v.SetDefault("routing.engine", "gin")               // 默认使用 Gin 路由
+	v.SetDefault("routing.loadBalancer", "round-robin") // 默认轮询
 
 	// Security
 	v.SetDefault("security.jwt.secret", "default-secret-key")

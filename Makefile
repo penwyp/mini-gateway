@@ -102,3 +102,16 @@ version:
 .PHONY: run-test-services
 run-test-services:
 	$(GO) run test/services.go
+
+.PHONY: setup-consul
+setup-consul:
+	@echo "Checking if Consul is installed..."
+	@command -v consul >/dev/null 2>&1 || { echo "Consul not found. Please install Consul first."; exit 1; }
+	@echo "Starting Consul agent in dev mode..."
+	@consul agent -dev & \
+	sleep 2; \
+	echo "Pushing load balancer rules to Consul KV Store..."; \
+	curl -X PUT -d '{"/api/v1/user": ["http://localhost:8081", "http://localhost:8083"], "/api/v1/order": ["http://localhost:8082"]}' http://localhost:8500/v1/kv/gateway/loadbalancer/rules; \
+	echo "Consul test environment setup complete."; \
+	echo "Load balancer rules:"; \
+	curl http://localhost:8500/v1/kv/gateway/loadbalancer/rules?raw

@@ -43,22 +43,22 @@ func Setup(r *gin.Engine, cfg *config.Config) {
 	var router Router
 	switch cfg.Routing.Engine {
 	case "trie":
-		router = NewTrieRouter()
+		router = NewTrieRouter(cfg)
 		logger.Info("Using Trie routing engine")
 	case "trie-regexp":
-		router = NewTrieRegexpRouter()
+		router = NewTrieRegexpRouter(cfg)
 		logger.Info("Using Trie-Regexp routing engine")
 	case "regexp":
-		router = NewRegexpRouter()
+		router = NewRegexpRouter(cfg)
 		logger.Info("Using Regexp routing engine")
 	case "gin":
-		router = NewGinRouter()
+		router = NewGinRouter(cfg)
 		logger.Info("Using Gin routing engine")
 	default:
 		logger.Warn("Unknown routing engine, falling back to Gin",
 			zap.String("engine", cfg.Routing.Engine),
 		)
-		router = NewGinRouter()
+		router = NewGinRouter(cfg)
 	}
 
 	router.Setup(r, cfg)
