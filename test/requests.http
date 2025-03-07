@@ -1,8 +1,24 @@
-### 测试 User 服务路由
+### 测试 User 服务路由 - JWT
 GET http://localhost:8080/api/v1/user
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiYWRtaW4iLCJleHAiOjE3NDEzNDc3NzYsImlhdCI6MTc0MTM0MDU3NiwiaXNzIjoibWluaS1nYXRld2F5In0.pHQmn6vm_vYN6CpBgU844RhTm_tMzXQwEgS5CVqkZA8
+
+### 测试 User 服务路由 - RBAC
+GET http://localhost:8080/api/v1/user
+Authorization: Bearer f0hO4EbKJ-oKIykjGbuKjZ6PAoeL5oj0an8wYdrqHK4=
 
 ### 测试 Order 服务路由
 GET http://localhost:8080/api/v1/order
 
 ### 测试健康检查
 GET http://localhost:8080/health
+
+### 获取Token [JWT, RBAC]
+POST http://localhost:8080/login
+Content-Type: application/json
+
+{
+    "username": "admin",
+    "password": "password"
+}
+
+

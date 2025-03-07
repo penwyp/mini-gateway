@@ -7,5 +7,5 @@ import (
 
 // Router 定义路由引擎接口
 type Router interface {
-	Setup(r *gin.Engine, cfg *config.Config)
+	Setup(r gin.IRouter, cfg *config.Config)
 }

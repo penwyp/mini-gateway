@@ -1,5 +1,8 @@
 server:
   port: "8080"
+logger:
+  level: "debug"
+  filePath: "logs/gateway.log"
 routing:
   rules:
     "/api/v1/user":
@@ -11,12 +14,17 @@ routing:
       - target: "http://localhost:8082"
         weight: 1
   engine: "gin"
-  loadBalancer: "consul"
+  loadBalancer: "round_robin"
 security:
+  authMode: "rbac"
   jwt:
     secret: "change-to-your-secret-key"
-    expiresIn: 7200
-    enable: false
+    expiresIn: 7200000
+    enabled: true
+  rbac:
+    enabled: true
+    modelPath: "config/data/rbac_model.conf"
+    policyPath: "config/data/rbac_policy.csv"
   ipBlacklist:
     - "192.168.1.100"
   ipWhitelist:

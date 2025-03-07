@@ -34,9 +34,13 @@ func main() {
 		Compress:   cfg.Logger.Compress,
 	})
 
-	if cfg.Routing.LoadBalancer != "consul" && (cfg.Routing.Rules == nil || len(cfg.Routing.Rules) == 0) {
+	if cfg.Routing.LoadBalancer != "consul" && len(cfg.Routing.Rules) == 0 {
 		logger.Error("Routing rules are empty or not defined in configuration")
 		os.Exit(1)
+	}
+
+	if cfg.Security.AuthMode == "rbac" && cfg.Security.RBAC.Enabled {
+		security.InitRBAC(cfg)
 	}
 
 	logger.Info("Gateway starting",
@@ -47,12 +51,13 @@ func main() {
 		zap.String("gitCommit", GitCommit),
 		zap.String("goVersion", GoVersion),
 		zap.Any("routingRules", cfg.Routing.Rules),
+		zap.Bool("jwtEnabled", cfg.Security.JWT.Enabled),
 	)
 
 	r := gin.Default()
-	r.Use(middleware.Auth(), middleware.RateLimit())
-	routing.Setup(r, cfg)
+	r.Use(middleware.RateLimit()) // 全局只保留速率限制
 
+	// 无认证路由组
 	r.POST("/login", func(c *gin.Context) {
 		var creds struct {
 			Username string `json:"username" binding:"required"`
@@ -72,22 +77,37 @@ func main() {
 			return
 		}
 
-		token, err := security.GenerateToken(creds.Username)
-		if err != nil {
-			logger.Error("Failed to generate token", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error"})
-			return
+		if cfg.Security.AuthMode == "jwt" {
+			token, err := security.GenerateToken(creds.Username)
+			if err != nil {
+				logger.Error("Failed to generate JWT token", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"token": token})
+		} else if cfg.Security.AuthMode == "rbac" {
+			token, err := security.GenerateRBACLoginToken(creds.Username)
+			if err != nil {
+				logger.Error("Failed to generate RBAC token", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"token": token, "username": creds.Username})
+		} else {
+			c.JSON(http.StatusOK, gin.H{"message": "Login successful", "username": creds.Username})
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"token": token,
-		})
 	})
 
+	// 健康检查路由
 	r.GET("/health", func(c *gin.Context) {
 		logger.Info("Health check requested", zap.String("clientIP", c.ClientIP()))
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// 受保护路由组
+	protected := r.Group("/")
+	protected.Use(middleware.Auth())
+	routing.Setup(protected, cfg)
 
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
 	logger.Info("Server listening", zap.String("address", addr))

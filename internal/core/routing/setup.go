@@ -36,7 +36,7 @@ func validateRules(cfg *config.Config) {
 }
 
 // Setup 根据配置选择路由引擎并初始化
-func Setup(r *gin.Engine, cfg *config.Config) {
+func Setup(r gin.IRouter, cfg *config.Config) {
 	logger.Info("Routing rules loaded", zap.Any("rules", cfg.Routing.Rules))
 	validateRules(cfg)
 

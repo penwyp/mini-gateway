@@ -74,7 +74,7 @@ func (t *Trie) Search(path string) ([]string, bool) {
 	return nil, false
 }
 
-func (tr *TrieRouter) Setup(r *gin.Engine, cfg *config.Config) {
+func (tr *TrieRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.Rules
 	if len(rules) == 0 {
 		logger.Warn("No routing rules found in configuration")

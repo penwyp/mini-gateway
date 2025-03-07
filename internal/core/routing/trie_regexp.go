@@ -102,7 +102,7 @@ func (t *TrieRegexp) Search(path string) ([]string, bool) {
 	return nil, false
 }
 
-func (tr *TrieRegexpRouter) Setup(r *gin.Engine, cfg *config.Config) {
+func (tr *TrieRegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.Rules
 	if len(rules) == 0 {
 		logger.Warn("No routing rules found in configuration")

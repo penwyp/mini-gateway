@@ -1,15 +1,16 @@
 package routing
 
 import (
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"regexp"
+
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/internal/core/loadbalancer"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
-	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"regexp"
 )
 
 type RegexpRouter struct {
@@ -29,7 +30,7 @@ func NewRegexpRouter(cfg *config.Config) *RegexpRouter {
 	}
 }
 
-func (rr *RegexpRouter) Setup(r *gin.Engine, cfg *config.Config) {
+func (rr *RegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.Rules
 	if len(rules) == 0 {
 		logger.Warn("No routing rules found in configuration")

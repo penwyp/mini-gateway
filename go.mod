@@ -3,9 +3,11 @@ module github.com/penwyp/mini-gateway
 go 1.23.4
 
 require (
-	github.com/dgrijalva/jwt-go v3.2.0+incompatible
+	github.com/casbin/casbin/v2 v2.103.0
+	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/gin-gonic/gin v1.10.0
+	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/hashicorp/consul/api v1.31.2
 	github.com/spf13/viper v1.19.0
 	go.uber.org/zap v1.21.0
@@ -15,8 +17,10 @@ require (
 
 require (
 	github.com/armon/go-metrics v0.4.1 // indirect
+	github.com/bmatcuk/doublestar/v4 v4.6.1 // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect
 	github.com/bytedance/sonic/loader v0.1.1 // indirect
+	github.com/casbin/govaluate v1.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.4 // indirect
 	github.com/cloudwego/iasm v0.2.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect

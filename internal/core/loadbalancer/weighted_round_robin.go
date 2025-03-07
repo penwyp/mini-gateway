@@ -1,9 +1,10 @@
 package loadbalancer
 
 import (
-	"github.com/penwyp/mini-gateway/pkg/util"
 	"net/http"
 	"sync"
+
+	"github.com/penwyp/mini-gateway/pkg/util"
 )
 
 type TargetWeight struct {

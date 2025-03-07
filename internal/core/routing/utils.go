@@ -1,11 +1,12 @@
 package routing
 
 import (
-	"github.com/penwyp/mini-gateway/pkg/logger"
-	"go.uber.org/zap"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/penwyp/mini-gateway/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // SingleJoiningSlash 合并路径，确保只有一个斜杠
@@ -43,6 +44,6 @@ func defaultErrorHandler(target string) func(w http.ResponseWriter, r *http.Requ
 			zap.Error(err),
 		)
 		w.WriteHeader(http.StatusBadGateway)
-		w.Write([]byte("Bad Gateway"))
+		_, _ = w.Write([]byte("Bad Gateway"))
 	}
 }

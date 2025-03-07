@@ -44,10 +44,19 @@ type JWT struct {
 }
 
 type Security struct {
+	AuthMode    string   `mapstructure:"authMode"` // 认证模式（如：JWT、OAuth2 等）
 	JWT         JWT      `mapstructure:"jwt"`
+	RBAC        RBAC     `mapstructure:"rbac"`
 	IPBlacklist []string `mapstructure:"ipBlacklist"` // IP 黑名单
 	IPWhitelist []string `mapstructure:"ipWhitelist"` // IP 白名单
 }
+
+type RBAC struct {
+	Enabled    bool   `mapstructure:"enabled"`
+	ModelPath  string `mapstructure:"modelPath"`  // RBAC 模型文件路径
+	PolicyPath string `mapstructure:"policyPath"` // RBAC 策略文件路径
+}
+
 type TrafficRateLimit struct {
 	Enabled bool `mapstructure:"enabled"` // 是否启用限流
 	QPS     int  `mapstructure:"qps"`     // 每秒请求数限制
@@ -146,6 +155,10 @@ func setDefaultValues(v *viper.Viper) {
 	// Routing
 	v.SetDefault("routing.engine", "gin")               // 默认使用 Gin 路由
 	v.SetDefault("routing.loadBalancer", "round-robin") // 默认轮询
+	v.SetDefault("security.authMode", "none")           // 默认无认证
+	v.SetDefault("security.rbac.enabled", false)
+	v.SetDefault("security.rbac.modelPath", "config/data/rbac_model.conf")
+	v.SetDefault("security.rbac.policyPath", "config/data/rbac_policy.csv")
 
 	// Security
 	v.SetDefault("security.jwt.secret", "default-secret-key")
