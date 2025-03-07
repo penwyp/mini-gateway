@@ -2,12 +2,14 @@ server:
   port: "8080"
 routing:
   rules:
-    "/api/v1/user": "http://localhost:8081"
-    "/api/v1/order": "http://localhost:8082"
+    "/api/v1/user": "http://localhost:8081/user/"
+    "/api/v1/order": "http://localhost:8082/order/"
+  engine: "trie-regexp"
 security:
   jwt:
-    secret: "my-secret-key"
+    secret: "change-to-your-secret-key"
     expiresIn: 7200
+    enable: false
   ipBlacklist:
     - "192.168.1.100"
   ipWhitelist:

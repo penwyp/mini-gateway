@@ -1,3 +1,4 @@
+// internal/middleware/auth.go
 package middleware
 
 import (
@@ -11,12 +12,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// Auth JWT 认证中间件
 func Auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.GetConfig()
+		if !cfg.Security.JWT.Enabled {
+			c.Next()
+			return
+		}
 
-		// 从请求头获取 Authorization
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			logger.Warn("No Authorization header provided", zap.String("path", c.Request.URL.Path))
@@ -25,7 +28,6 @@ func Auth() gin.HandlerFunc {
 			return
 		}
 
-		// 解析 Bearer Token
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			logger.Warn("Invalid Authorization header format", zap.String("header", authHeader))
@@ -35,7 +37,6 @@ func Auth() gin.HandlerFunc {
 		}
 		tokenStr := parts[1]
 
-		// 解析并验证 JWT
 		token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
@@ -50,13 +51,11 @@ func Auth() gin.HandlerFunc {
 			return
 		}
 
-		// 将用户信息存入上下文（可选）
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
 			c.Set("user_id", claims["user_id"])
 			logger.Debug("JWT authenticated", zap.Any("user_id", claims["user_id"]))
 		}
 
-		// 继续处理请求
 		c.Next()
 	}
 }

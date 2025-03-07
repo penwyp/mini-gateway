@@ -2,21 +2,28 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/internal/core/routing"
+	"github.com/penwyp/mini-gateway/internal/core/security" // 更新路径
 	"github.com/penwyp/mini-gateway/internal/middleware"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 )
 
+var (
+	Version   string
+	BuildTime string
+	GitCommit string
+	GoVersion string
+)
+
 func main() {
-	// 1. 初始化配置
 	cfg := config.InitConfig()
 
-	// 2. 初始化日志
 	logger.Init(logger.Config{
 		Level:      cfg.Logger.Level,
 		FilePath:   cfg.Logger.FilePath,
@@ -26,28 +33,58 @@ func main() {
 		Compress:   cfg.Logger.Compress,
 	})
 
-	// 记录启动信息
 	logger.Info("Gateway starting",
 		zap.String("port", cfg.Server.Port),
 		zap.String("configPath", "config/config.yaml"),
+		zap.String("version", Version),
+		zap.String("buildTime", BuildTime),
+		zap.String("gitCommit", GitCommit),
+		zap.String("goVersion", GoVersion),
 	)
 
-	// 3. 初始化 Gin 引擎
 	r := gin.Default()
-
-	// 4. 注册中间件（示例）
 	r.Use(middleware.Auth(), middleware.RateLimit())
-
-	// 5. 初始化路由模块
 	routing.Setup(r, cfg)
 
-	// 6. 添加健康检查端点（示例）
+	// 添加登录接口
+	r.POST("/login", func(c *gin.Context) {
+		var creds struct {
+			Username string `json:"username" binding:"required"`
+			Password string `json:"password" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&creds); err != nil {
+			logger.Warn("Invalid login request", zap.Error(err))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		// 简单验证（示例，实际应使用数据库）
+		if creds.Username != "admin" || creds.Password != "password" {
+			logger.Warn("Login failed",
+				zap.String("username", creds.Username),
+			)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+			return
+		}
+
+		// 生成 JWT
+		token, err := security.GenerateToken(creds.Username)
+		if err != nil {
+			logger.Error("Failed to generate token", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"token": token,
+		})
+	})
+
 	r.GET("/health", func(c *gin.Context) {
 		logger.Info("Health check requested", zap.String("clientIP", c.ClientIP()))
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// 7. 启动服务
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
 	logger.Info("Server listening", zap.String("address", addr))
 	if err := r.Run(addr); err != nil {

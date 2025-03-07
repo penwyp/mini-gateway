@@ -98,3 +98,7 @@ version:
 	@echo "Build Time: $(BUILD_TIME)"
 	@echo "Git Commit: $(GIT_COMMIT)"
 	@echo "Go Version: $(GO_VERSION)"
+
+.PHONY: run-test-services
+run-test-services:
+	$(GO) run test/services.go

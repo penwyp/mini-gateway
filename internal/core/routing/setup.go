@@ -1,9 +1,8 @@
 package routing
 
 import (
-	"net/http"
-	"net/http/httputil"
-	"net/url"
+	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
@@ -11,54 +10,56 @@ import (
 	"go.uber.org/zap"
 )
 
-// Setup 初始化路由模块，将配置中的路由规则注册到 Gin 引擎
-func Setup(r *gin.Engine, cfg *config.Config) {
-	// 获取路由规则
+// isRegexPattern 检查路径是否为正则表达式
+func isRegexPattern(path string) bool {
+	return strings.ContainsAny(path, ".*+?()|[]^$\\")
+}
+
+// validateRules 检查路由规则与引擎的兼容性
+func validateRules(cfg *config.Config) {
+	engine := cfg.Routing.Engine
 	rules := cfg.Routing.Rules
-	if len(rules) == 0 {
-		logger.Warn("No routing rules found in configuration")
-		return
+
+	for path := range rules {
+		if isRegexPattern(path) {
+			// 如果路径是正则表达式，但引擎不支持，则报错
+			if engine != "trie-regexp" && engine != "regexp" {
+				logger.Error("Invalid routing engine for regex pattern",
+					zap.String("engine", engine),
+					zap.String("path", path),
+					zap.String("hint", "Use 'trie-regexp' or 'regexp' for regex routes"),
+				)
+				os.Exit(1)
+			}
+		}
 	}
+}
 
-	// 遍历并注册路由
-	for path, target := range rules {
-		// 解析目标 URL
-		targetURL, err := url.Parse(target)
-		if err != nil {
-			logger.Error("Failed to parse target URL",
-				zap.String("path", path),
-				zap.String("target", target),
-				zap.Error(err),
-			)
-			continue
-		}
+// Setup 根据配置选择路由引擎并初始化
+func Setup(r *gin.Engine, cfg *config.Config) {
+	logger.Info("Routing rules loaded", zap.Any("rules", cfg.Routing.Rules))
+	validateRules(cfg)
 
-		// 创建反向代理
-		proxy := httputil.NewSingleHostReverseProxy(targetURL)
-		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			logger.Error("Proxy error",
-				zap.String("path", r.URL.Path),
-				zap.String("target", target),
-				zap.Error(err),
-			)
-			w.WriteHeader(http.StatusBadGateway)
-			w.Write([]byte("Bad Gateway"))
-		}
-
-		// 注册路由处理函数
-		r.Any(path, func(c *gin.Context) {
-			logger.Debug("Routing request",
-				zap.String("path", c.Request.URL.Path),
-				zap.String("target", target),
-				zap.String("method", c.Request.Method),
-			)
-			proxy.ServeHTTP(c.Writer, c.Request)
-		})
-
-		// 记录成功注册的路由
-		logger.Info("Route registered",
-			zap.String("path", path),
-			zap.String("target", target),
+	var router Router
+	switch cfg.Routing.Engine {
+	case "trie":
+		router = NewTrieRouter()
+		logger.Info("Using Trie routing engine")
+	case "trie-regexp":
+		router = NewTrieRegexpRouter()
+		logger.Info("Using Trie-Regexp routing engine")
+	case "regexp":
+		router = NewRegexpRouter()
+		logger.Info("Using Regexp routing engine")
+	case "gin":
+		router = NewGinRouter()
+		logger.Info("Using Gin routing engine")
+	default:
+		logger.Warn("Unknown routing engine, falling back to Gin",
+			zap.String("engine", cfg.Routing.Engine),
 		)
+		router = NewGinRouter()
 	}
+
+	router.Setup(r, cfg)
 }

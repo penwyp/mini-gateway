@@ -16,12 +16,14 @@ type Config struct {
 		Port string `mapstructure:"port"` // 服务监听端口
 	} `mapstructure:"server"`
 	Routing struct {
-		Rules map[string]string `mapstructure:"rules"` // 动态路由规则
+		Rules  map[string]string `mapstructure:"rules"`  // 动态路由规则
+		Engine string            `mapstructure:"engine"` // 路由引擎：gin 或 trie
 	} `mapstructure:"routing"`
 	Security struct {
 		JWT struct {
 			Secret    string `mapstructure:"secret"`    // JWT 密钥
 			ExpiresIn int    `mapstructure:"expiresIn"` // JWT 过期时间（秒）
+			Enabled   bool   `mapstructure:"enabled"`   // 是否启用 JWT
 		} `mapstructure:"jwt"`
 		IPBlacklist []string `mapstructure:"ipBlacklist"` // IP 黑名单
 		IPWhitelist []string `mapstructure:"ipWhitelist"` // IP 白名单
@@ -116,6 +118,9 @@ func GetConfig() *Config {
 func setDefaultValues(v *viper.Viper) {
 	// Server
 	v.SetDefault("server.port", "8080")
+
+	// Routing
+	v.SetDefault("routing.engine", "gin") // 默认使用 Gin 路由
 
 	// Security
 	v.SetDefault("security.jwt.secret", "default-secret-key")
