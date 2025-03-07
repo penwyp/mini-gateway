@@ -1,0 +1,30 @@
+server:
+  port: "8080"
+routing:
+  rules:
+    "/api/v1/user": "http://localhost:8081"
+    "/api/v1/order": "http://localhost:8082"
+security:
+  jwt:
+    secret: "my-secret-key"
+    expiresIn: 7200
+  ipBlacklist:
+    - "192.168.1.100"
+  ipWhitelist:
+    - "127.0.0.1"
+traffic:
+  rateLimit:
+    enabled: true
+    qps: 1000
+    burst: 2000
+  breaker:
+    enabled: true
+    errorRate: 0.5
+    timeout: 10
+observability:
+  prometheus:
+    enabled: true
+    path: "/metrics"
+plugins:
+  - "log"
+  - "metrics"
