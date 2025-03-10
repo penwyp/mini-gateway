@@ -13,6 +13,7 @@ require (
 	github.com/prometheus/client_golang v1.11.1
 	github.com/redis/go-redis/v9 v9.7.1
 	github.com/spf13/viper v1.19.0
+	go.uber.org/ratelimit v0.3.1
 	go.uber.org/zap v1.21.0
 	golang.org/x/time v0.5.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
@@ -20,6 +21,7 @@ require (
 
 require (
 	github.com/armon/go-metrics v0.4.1 // indirect
+	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.6.1 // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect

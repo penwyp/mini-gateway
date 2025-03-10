@@ -43,8 +43,9 @@ cache:
 traffic:
   rateLimit:
     enabled: true
-    qps: 1000
-    burst: 2000
+    qps: 1500
+    burst: 3000
+    algorithm: "leaky_bucket"  # 可选值: "token_bucket" 或 "leaky_bucket"
   breaker:
     enabled: true
     errorRate: 0.5

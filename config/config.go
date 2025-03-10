@@ -75,9 +75,10 @@ type RBAC struct {
 }
 
 type TrafficRateLimit struct {
-	Enabled bool `mapstructure:"enabled"` // 是否启用限流
-	QPS     int  `mapstructure:"qps"`     // 每秒请求数限制
-	Burst   int  `mapstructure:"burst"`   // 令牌桶突发容量
+	Enabled   bool   `mapstructure:"enabled"`   // 是否启用限流
+	QPS       int    `mapstructure:"qps"`       // 每秒请求数限制
+	Burst     int    `mapstructure:"burst"`     // 令牌桶突发容量
+	Algorithm string `mapstructure:"algorithm"` // 限流算法: "token_bucket" 或 "leaky_bucket"
 }
 
 type TrafficBreaker struct {
@@ -203,6 +204,7 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("traffic.rateLimit.enabled", true)
 	v.SetDefault("traffic.rateLimit.qps", 1000)
 	v.SetDefault("traffic.rateLimit.burst", 2000)
+	v.SetDefault("traffic.rateLimit.algorithm", "token_bucket") // 默认使用令牌桶
 	v.SetDefault("traffic.breaker.enabled", true)
 	v.SetDefault("traffic.breaker.errorRate", 0.5)
 	v.SetDefault("traffic.breaker.timeout", 1000)

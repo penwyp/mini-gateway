@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
@@ -36,7 +38,7 @@ func main() {
 	})
 
 	if cfg.Routing.LoadBalancer != "consul" && (cfg.Routing.Rules == nil || len(cfg.Routing.Rules) == 0) {
-		logger.Error("Routing rules are empty or not defined in configuration")
+		logger.Error("路由规则为空或未在配置中定义")
 		os.Exit(1)
 	}
 
@@ -50,7 +52,7 @@ func main() {
 		security.InitRBAC(cfg)
 	}
 
-	logger.Info("Gateway starting",
+	logger.Info("网关启动中",
 		zap.String("port", cfg.Server.Port),
 		zap.String("version", Version),
 		zap.String("buildTime", BuildTime),
@@ -63,10 +65,24 @@ func main() {
 
 	r := gin.Default()
 
-	// 根据配置动态应用中间件
+	// 保存漏桶限流器的引用，以便清理
+	var leakyLimiter *middleware.LeakyBucketLimiter
+
+	// 根据配置选择限流算法
 	if cfg.Middleware.RateLimit {
-		r.Use(middleware.RateLimit())
+		switch cfg.Traffic.RateLimit.Algorithm {
+		case "token_bucket":
+			r.Use(middleware.TokenBucketRateLimit())
+		case "leaky_bucket":
+			leakyLimiter = middleware.NewLeakyBucketLimiter(cfg.Traffic.RateLimit.QPS, cfg.Traffic.RateLimit.Burst)
+			r.Use(middleware.LeakyBucketRateLimit())
+		default:
+			logger.Error("未知的限流算法", zap.String("algorithm", cfg.Traffic.RateLimit.Algorithm))
+			os.Exit(1)
+		}
 	}
+
+	// 其他中间件
 	if cfg.Middleware.IPAcl {
 		r.Use(middleware.IPAcl())
 	}
@@ -77,48 +93,47 @@ func main() {
 		r.Use(middleware.Breaker())
 	}
 
+	// 路由设置
 	r.POST("/login", func(c *gin.Context) {
 		var creds struct {
 			Username string `json:"username" binding:"required"`
 			Password string `json:"password" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&creds); err != nil {
-			logger.Warn("Invalid login request", zap.Error(err))
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			logger.Warn("无效的登录请求", zap.Error(err))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效请求"})
 			return
 		}
 
 		if creds.Username != "admin" || creds.Password != "password" {
-			logger.Warn("Login failed",
-				zap.String("username", creds.Username),
-			)
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+			logger.Warn("登录失败", zap.String("username", creds.Username))
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "无效凭证"})
 			return
 		}
 
 		if cfg.Security.AuthMode == "jwt" {
 			token, err := security.GenerateToken(creds.Username)
 			if err != nil {
-				logger.Error("Failed to generate JWT token", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error"})
+				logger.Error("生成JWT令牌失败", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器错误"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"token": token})
 		} else if cfg.Security.AuthMode == "rbac" {
 			token, err := security.GenerateRBACLoginToken(creds.Username)
 			if err != nil {
-				logger.Error("Failed to generate RBAC token", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error"})
+				logger.Error("生成RBAC令牌失败", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器错误"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"token": token, "username": creds.Username})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"message": "Login successful", "username": creds.Username})
+			c.JSON(http.StatusOK, gin.H{"message": "登录成功", "username": creds.Username})
 		}
 	})
 
 	r.GET("/health", func(c *gin.Context) {
-		logger.Info("Health check requested", zap.String("clientIP", c.ClientIP()))
+		logger.Info("健康检查请求", zap.String("clientIP", c.ClientIP()))
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
@@ -133,9 +148,35 @@ func main() {
 	}
 	routing.Setup(protected, cfg)
 
-	addr := fmt.Sprintf(":%s", cfg.Server.Port)
-	logger.Info("Server listening", zap.String("address", addr))
-	if err := r.Run(addr); err != nil {
-		logger.Error("Failed to start server", zap.Error(err))
+	// 创建HTTP服务器
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%s", cfg.Server.Port),
+		Handler: r,
+	}
+
+	// 启动服务器
+	go func() {
+		logger.Info("服务器监听中", zap.String("address", srv.Addr))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("启动服务器失败", zap.Error(err))
+			os.Exit(1)
+		}
+	}()
+
+	// 等待中断信号以优雅关闭
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	logger.Info("正在关闭服务器...")
+
+	// 清理漏桶资源（如果使用）
+	if cfg.Middleware.RateLimit && cfg.Traffic.RateLimit.Algorithm == "leaky_bucket" && leakyLimiter != nil {
+		middleware.CleanupLeakyBucket(leakyLimiter)
+	}
+
+	// 同步日志并检查错误
+	if err := logger.Sync(); err != nil {
+		fmt.Fprintf(os.Stderr, "日志同步失败: %v\n", err)
+		os.Exit(1)
 	}
 }

@@ -67,6 +67,15 @@ func GetLogger() *Logger {
 	return loggerInstance
 }
 
+// Sync 同步日志缓冲区，将未写入的日志刷新到输出目标
+func Sync() error {
+	logger := GetLogger()
+	if logger == nil {
+		return nil // 如果日志未初始化，无需同步
+	}
+	return logger.Logger.Sync()
+}
+
 // getEncoder 配置日志编码器（JSON 格式）
 func getEncoder() zapcore.Encoder {
 	encoderConfig := zap.NewProductionEncoderConfig()
