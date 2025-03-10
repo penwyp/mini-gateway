@@ -37,11 +37,13 @@ type Redis struct {
 	DB       int    `mapstructure:"db"`
 }
 
-type RoutingRules []RoutingRule
 type RoutingRule struct {
 	Target string `mapstructure:"target"`
 	Weight int    `mapstructure:"weight"`
+	Env    string `mapstructure:"env"` // 新增字段，标记环境（stable/canary）
 }
+
+type RoutingRules []RoutingRule
 
 type Routing struct {
 	Rules        map[string]RoutingRules `mapstructure:"rules"`

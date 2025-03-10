@@ -105,3 +105,42 @@ func TestKetama_Consistency(t *testing.T) {
 	// 不同 IP 可能不同，但不强制检查具体值
 	t.Logf("IP1: %v, IP2: %v", target1, target3)
 }
+
+func TestKetama_Concurrency(t *testing.T) {
+	k := NewKetama(160)
+	targets := []string{"http://localhost:8081", "http://localhost:8082"}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+
+	results := make(chan string, 100)
+	for i := 0; i < 100; i++ {
+		go func() {
+			results <- k.SelectTarget(targets, req)
+		}()
+	}
+
+	// 检查一致性
+	expected := k.SelectTarget(targets, req)
+	for i := 0; i < 100; i++ {
+		got := <-results
+		if got != expected {
+			t.Errorf("Ketama concurrency inconsistent: got %v, want %v", got, expected)
+		}
+	}
+}
+
+func TestKetama_ZeroReplicas(t *testing.T) {
+	k := NewKetama(0) // 零副本
+	targets := []string{"http://localhost:8081", "http://localhost:8082"}
+	k.buildRing(targets)
+
+	if len(k.hashRing) != 0 {
+		t.Errorf("Expected empty hashRing with zero replicas, got %d", len(k.hashRing))
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	got := k.SelectTarget(targets, req)
+	if got != targets[0] {
+		t.Errorf("Expected first target %v with zero replicas, got %v", targets[0], got)
+	}
+}

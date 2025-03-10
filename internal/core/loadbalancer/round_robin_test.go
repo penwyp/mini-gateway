@@ -98,3 +98,12 @@ func TestRoundRobin_Concurrency(t *testing.T) {
 		}
 	}
 }
+
+func TestRoundRobin_NilRequest(t *testing.T) {
+	rr := NewRoundRobin()
+	targets := []string{"http://localhost:8081", "http://localhost:8082"}
+	got := rr.SelectTarget(targets, nil) // nil request
+	if got == "" {
+		t.Errorf("SelectTarget() with nil request returned empty string, expected a target")
+	}
+}

@@ -2,8 +2,6 @@ package routing
 
 import (
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"regexp"
 	"strings"
 
@@ -25,7 +23,7 @@ type TrieRegexp struct {
 
 type TrieRegexpNode struct {
 	Children     map[rune]*TrieRegexpNode
-	Targets      []string
+	Rules        config.RoutingRules
 	IsEnd        bool
 	Regex        *regexp.Regexp
 	RegexPattern string
@@ -34,37 +32,33 @@ type TrieRegexpNode struct {
 func NewTrieRegexpRouter(cfg *config.Config) *TrieRegexpRouter {
 	lb, err := loadbalancer.NewLoadBalancer(cfg.Routing.LoadBalancer, cfg)
 	if err != nil {
-		logger.Error("Failed to create load balancer", zap.Error(err))
+		logger.Error("创建负载均衡器失败", zap.Error(err))
 		lb = loadbalancer.NewRoundRobin()
 	}
 	return &TrieRegexpRouter{
-		Trie: &TrieRegexp{
-			Root: &TrieRegexpNode{Children: make(map[rune]*TrieRegexpNode)},
-		},
-		lb: lb,
+		Trie: &TrieRegexp{Root: &TrieRegexpNode{Children: make(map[rune]*TrieRegexpNode)}},
+		lb:   lb,
 	}
 }
 
-func (t *TrieRegexp) Insert(path string, targets []string) {
+func (t *TrieRegexp) Insert(path string, rules config.RoutingRules) {
 	node := t.Root
 	path = strings.TrimPrefix(path, "/")
 
 	if strings.ContainsAny(path, ".*+?()|[]^$\\") {
 		re, err := regexp.Compile("^" + path + "$")
 		if err != nil {
-			logger.Error("Invalid regex pattern",
+			logger.Error("无效的正则表达式模式",
 				zap.String("path", "/"+path),
-				zap.Error(err),
-			)
+				zap.Error(err))
 			return
 		}
 		node.Regex = re
 		node.RegexPattern = path
-		node.Targets = targets
-		logger.Info("Regex route inserted into Trie",
+		node.Rules = rules
+		logger.Info("在 Trie 中插入正则路由",
 			zap.String("pattern", "/"+path),
-			zap.Strings("targets", targets),
-		)
+			zap.Any("rules", rules))
 		return
 	}
 
@@ -74,15 +68,14 @@ func (t *TrieRegexp) Insert(path string, targets []string) {
 		}
 		node = node.Children[ch]
 	}
-	node.Targets = targets
+	node.Rules = rules
 	node.IsEnd = true
-	logger.Info("Route inserted into Trie",
+	logger.Info("在 Trie 中插入路由",
 		zap.String("path", "/"+path),
-		zap.Strings("targets", targets),
-	)
+		zap.Any("rules", rules))
 }
 
-func (t *TrieRegexp) Search(path string) ([]string, bool) {
+func (t *TrieRegexp) Search(path string) (config.RoutingRules, bool) {
 	node := t.Root
 	cleanPath := strings.TrimPrefix(path, "/")
 	for _, ch := range cleanPath {
@@ -92,11 +85,11 @@ func (t *TrieRegexp) Search(path string) ([]string, bool) {
 		node = node.Children[ch]
 	}
 	if node != nil && node.IsEnd {
-		return node.Targets, true
+		return node.Rules, true
 	}
 
 	if t.Root.Regex != nil && t.Root.Regex.MatchString(path) {
-		return t.Root.Targets, true
+		return t.Root.Rules, true
 	}
 
 	return nil, false
@@ -105,66 +98,26 @@ func (t *TrieRegexp) Search(path string) ([]string, bool) {
 func (tr *TrieRegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.Rules
 	if len(rules) == 0 {
-		logger.Warn("No routing rules found in configuration")
+		logger.Warn("配置中未找到路由规则")
+		return
 	}
 
 	for path, targetRules := range rules {
-		targets := make([]string, len(targetRules))
-		for i, rule := range targetRules {
-			targets[i] = rule.Target
-		}
-		tr.Trie.Insert(path, targets)
-		logger.Info("Route registered in Trie-Regexp",
-			zap.String("path", path),
-			zap.Any("targets", targetRules),
-		)
+		tr.Trie.Insert(path, targetRules)
 	}
 
 	r.Use(func(c *gin.Context) {
 		path := c.Request.URL.Path
-		targets, found := tr.Trie.Search(path)
+		targetRules, found := tr.Trie.Search(path)
 		if !found {
-			logger.Warn("Route not found",
+			logger.Warn("路由未找到",
 				zap.String("path", path),
-				zap.String("method", c.Request.Method),
-			)
-			c.JSON(http.StatusNotFound, gin.H{"error": "Route not found"})
+				zap.String("method", c.Request.Method))
+			c.JSON(http.StatusNotFound, gin.H{"error": "路由未找到"})
 			c.Abort()
 			return
 		}
 
-		target := tr.lb.SelectTarget(targets, c.Request)
-		if target == "" {
-			logger.Warn("No available targets",
-				zap.String("path", path),
-				zap.String("method", c.Request.Method),
-			)
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No available targets"})
-			c.Abort()
-			return
-		}
-
-		targetURL, err := url.Parse(target)
-		if err != nil {
-			logger.Error("Failed to parse target URL",
-				zap.String("path", path),
-				zap.String("target", target),
-				zap.Error(err),
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid target URL"})
-			c.Abort()
-			return
-		}
-
-		proxy := httputil.NewSingleHostReverseProxy(targetURL)
-		proxy.Director = defaultDirector(targetURL)
-		proxy.ErrorHandler = defaultErrorHandler(target)
-
-		logger.Debug("Routing request",
-			zap.String("path", path),
-			zap.String("target", target),
-			zap.String("method", c.Request.Method),
-		)
-		proxy.ServeHTTP(c.Writer, c.Request)
+		createProxyHandler(targetRules, tr.lb)(c)
 	})
 }

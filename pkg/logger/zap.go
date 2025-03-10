@@ -30,6 +30,32 @@ type Config struct {
 	Compress   bool   `mapstructure:"compress"`   // 是否压缩旧日志文件
 }
 
+func InitTest() *Logger {
+	loggerMutex.Do(func() {
+		// 配置 Zap 的核心组件
+		core := zapcore.NewCore(
+			getEncoder(), // 日志编码器（JSON 格式）
+			getWriteSyncer(Config{
+				FilePath:   "logs/gateway.log",
+				MaxSize:    100, // 100 MB
+				MaxBackups: 10,
+				MaxAge:     30, // 30 天
+				Compress:   true,
+			}),                   // 日志输出目标（文件 + 控制台）
+			getLogLevel("debug"), // 日志级别
+		)
+
+		// 创建 Zap Logger
+		zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
+		loggerInstance = &Logger{zapLogger}
+
+		// 替换全局 Zap logger，便于直接使用 zap.L()
+		zap.ReplaceGlobals(zapLogger)
+	})
+
+	return loggerInstance
+}
+
 // Init 初始化全局日志实例
 func Init(cfg Config) *Logger {
 	loggerMutex.Do(func() {

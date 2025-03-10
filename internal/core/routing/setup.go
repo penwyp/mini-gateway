@@ -10,6 +10,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// Router 定义路由引擎接口
+type Router interface {
+	Setup(r gin.IRouter, cfg *config.Config)
+}
+
 // isRegexPattern 检查路径是否为正则表达式
 func isRegexPattern(path string) bool {
 	return strings.ContainsAny(path, ".*+?()|[]^$\\")
@@ -21,43 +26,38 @@ func validateRules(cfg *config.Config) {
 	rules := cfg.Routing.Rules
 
 	for path := range rules {
-		if isRegexPattern(path) {
-			// 如果路径是正则表达式，但引擎不支持，则报错
-			if engine != "trie-regexp" && engine != "regexp" {
-				logger.Error("Invalid routing engine for regex pattern",
-					zap.String("engine", engine),
-					zap.String("path", path),
-					zap.String("hint", "Use 'trie-regexp' or 'regexp' for regex routes"),
-				)
-				os.Exit(1)
-			}
+		if isRegexPattern(path) && engine != "trie-regexp" && engine != "regexp" {
+			logger.Error("路由引擎与正则表达式路径不兼容",
+				zap.String("engine", engine),
+				zap.String("path", path),
+				zap.String("hint", "请使用 'trie-regexp' 或 'regexp' 引擎支持正则路由"))
+			os.Exit(1)
 		}
 	}
 }
 
-// Setup 根据配置选择路由引擎并初始化
+// Setup 初始化路由引擎并设置路由规则
 func Setup(r gin.IRouter, cfg *config.Config) {
-	logger.Info("Routing rules loaded", zap.Any("rules", cfg.Routing.Rules))
+	logger.Info("加载路由规则", zap.Any("rules", cfg.Routing.Rules))
 	validateRules(cfg)
 
 	var router Router
 	switch cfg.Routing.Engine {
 	case "trie":
 		router = NewTrieRouter(cfg)
-		logger.Info("Using Trie routing engine")
-	case "trie-regexp":
+		logger.Info("使用 Trie 路由引擎")
+	case "trie-regexp", "trie_regexp":
 		router = NewTrieRegexpRouter(cfg)
-		logger.Info("Using Trie-Regexp routing engine")
+		logger.Info("使用 Trie-Regexp 路由引擎")
 	case "regexp":
 		router = NewRegexpRouter(cfg)
-		logger.Info("Using Regexp routing engine")
+		logger.Info("使用 Regexp 路由引擎")
 	case "gin":
 		router = NewGinRouter(cfg)
-		logger.Info("Using Gin routing engine")
+		logger.Info("使用 Gin 路由引擎")
 	default:
-		logger.Warn("Unknown routing engine, falling back to Gin",
-			zap.String("engine", cfg.Routing.Engine),
-		)
+		logger.Warn("未知的路由引擎，回退到 Gin",
+			zap.String("engine", cfg.Routing.Engine))
 		router = NewGinRouter(cfg)
 	}
 

@@ -4,22 +4,24 @@ logger:
   level: "debug"
   filePath: "logs/gateway.log"
 middleware:
-  rateLimit: true
-  ipAcl: true
-  antiInjection: true
-  auth: true
-  breaker: true
+  rateLimit: false
+  ipAcl: false
+  antiInjection: false
+  auth: false
+  breaker: false
 routing:
   rules:
     "/api/v1/user":
       - target: "http://localhost:8081"
-        weight: 4
+        weight: 80
+        env: "stable"
       - target: "http://localhost:8083"
-        weight: 2
+        weight: 20
+        env: "canary"
     "/api/v1/order":
       - target: "http://localhost:8082"
-        weight: 1
-  engine: "gin"
+        weight: 10
+  engine: "trie_regexp"
   loadBalancer: "round_robin"
 security:
   authMode: "jwt"
@@ -35,6 +37,7 @@ security:
     - "192.168.1.100"
   ipWhitelist:
     - "127.0.0.1"
+    - "localhost"
   ipUpdateMode: "override" # 可选值：override（覆盖）或 append（追加）
 cache:
   addr: "10.2.103.35:6379"
@@ -43,7 +46,7 @@ cache:
 traffic:
   rateLimit:
     enabled: true
-    qps: 1500
+    qps: 1000
     burst: 3000
     algorithm: "leaky_bucket"  # 可选值: "token_bucket" 或 "leaky_bucket"
   breaker:

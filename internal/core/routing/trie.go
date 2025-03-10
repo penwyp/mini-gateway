@@ -2,8 +2,6 @@ package routing
 
 import (
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -24,25 +22,23 @@ type Trie struct {
 
 type TrieNode struct {
 	Children map[rune]*TrieNode
-	Targets  []string
+	Rules    config.RoutingRules
 	IsEnd    bool
 }
 
 func NewTrieRouter(cfg *config.Config) *TrieRouter {
 	lb, err := loadbalancer.NewLoadBalancer(cfg.Routing.LoadBalancer, cfg)
 	if err != nil {
-		logger.Error("Failed to create load balancer", zap.Error(err))
+		logger.Error("创建负载均衡器失败", zap.Error(err))
 		lb = loadbalancer.NewRoundRobin()
 	}
 	return &TrieRouter{
-		Trie: &Trie{
-			Root: &TrieNode{Children: make(map[rune]*TrieNode)},
-		},
-		lb: lb,
+		Trie: &Trie{Root: &TrieNode{Children: make(map[rune]*TrieNode)}},
+		lb:   lb,
 	}
 }
 
-func (t *Trie) Insert(path string, targets []string) {
+func (t *Trie) Insert(path string, rules config.RoutingRules) {
 	node := t.Root
 	path = strings.TrimPrefix(path, "/")
 	for _, ch := range path {
@@ -51,17 +47,17 @@ func (t *Trie) Insert(path string, targets []string) {
 		}
 		node = node.Children[ch]
 	}
-	node.Targets = targets
+	node.Rules = rules
 	node.IsEnd = true
-	logger.Info("Route inserted into Trie",
+	logger.Info("在 Trie 中插入路由",
 		zap.String("path", "/"+path),
-		zap.Strings("targets", targets),
-	)
+		zap.Any("rules", rules))
 }
 
-func (t *Trie) Search(path string) ([]string, bool) {
+func (t *Trie) Search(path string) (config.RoutingRules, bool) {
 	node := t.Root
 	path = strings.TrimPrefix(path, "/")
+	path = strings.TrimSuffix(path, "/") // 去掉末尾斜杠
 	for _, ch := range path {
 		if node.Children[ch] == nil {
 			return nil, false
@@ -69,7 +65,7 @@ func (t *Trie) Search(path string) ([]string, bool) {
 		node = node.Children[ch]
 	}
 	if node.IsEnd {
-		return node.Targets, true
+		return node.Rules, true
 	}
 	return nil, false
 }
@@ -77,66 +73,28 @@ func (t *Trie) Search(path string) ([]string, bool) {
 func (tr *TrieRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.Rules
 	if len(rules) == 0 {
-		logger.Warn("No routing rules found in configuration")
+		logger.Warn("配置中未找到路由规则")
+		return
 	}
 
 	for path, targetRules := range rules {
-		targets := make([]string, len(targetRules))
-		for i, rule := range targetRules {
-			targets[i] = rule.Target
-		}
-		tr.Trie.Insert(path, targets)
-		logger.Info("Route registered in Trie",
-			zap.String("path", path),
-			zap.Any("targets", targetRules),
-		)
+		tr.Trie.Insert(path, targetRules)
 	}
+	logger.Info("Trie 路由注册完成", zap.Int("rule_count", len(rules)))
 
 	r.Use(func(c *gin.Context) {
+		logger.Debug("进入 Trie 路由中间件", zap.String("path", c.Request.URL.Path))
 		path := c.Request.URL.Path
-		targets, found := tr.Trie.Search(path)
+		targetRules, found := tr.Trie.Search(path)
 		if !found {
-			logger.Warn("Route not found",
+			logger.Warn("路由未找到",
 				zap.String("path", path),
-				zap.String("method", c.Request.Method),
-			)
-			c.JSON(http.StatusNotFound, gin.H{"error": "Route not found"})
+				zap.String("method", c.Request.Method))
+			c.JSON(http.StatusNotFound, gin.H{"error": "路由未找到"})
 			c.Abort()
 			return
 		}
-
-		target := tr.lb.SelectTarget(targets, c.Request)
-		if target == "" {
-			logger.Warn("No available targets",
-				zap.String("path", path),
-				zap.String("method", c.Request.Method),
-			)
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No available targets"})
-			c.Abort()
-			return
-		}
-
-		targetURL, err := url.Parse(target)
-		if err != nil {
-			logger.Error("Failed to parse target URL",
-				zap.String("path", path),
-				zap.String("target", target),
-				zap.Error(err),
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid target URL"})
-			c.Abort()
-			return
-		}
-
-		proxy := httputil.NewSingleHostReverseProxy(targetURL)
-		proxy.Director = defaultDirector(targetURL)
-		proxy.ErrorHandler = defaultErrorHandler(target)
-
-		logger.Debug("Routing request",
-			zap.String("path", path),
-			zap.String("target", target),
-			zap.String("method", c.Request.Method),
-		)
-		proxy.ServeHTTP(c.Writer, c.Request)
+		logger.Info("路由匹配成功", zap.String("path", path), zap.Any("rules", targetRules))
+		createProxyHandler(targetRules, tr.lb)(c)
 	})
 }

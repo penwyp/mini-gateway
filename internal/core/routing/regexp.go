@@ -2,8 +2,6 @@ package routing
 
 import (
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"regexp"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +19,7 @@ type RegexpRouter struct {
 func NewRegexpRouter(cfg *config.Config) *RegexpRouter {
 	lb, err := loadbalancer.NewLoadBalancer(cfg.Routing.LoadBalancer, cfg)
 	if err != nil {
-		logger.Error("Failed to create load balancer", zap.Error(err))
+		logger.Error("创建负载均衡器失败", zap.Error(err))
 		lb = loadbalancer.NewRoundRobin()
 	}
 	return &RegexpRouter{
@@ -33,89 +31,47 @@ func NewRegexpRouter(cfg *config.Config) *RegexpRouter {
 func (rr *RegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.Rules
 	if len(rules) == 0 {
-		logger.Warn("No routing rules found in configuration")
+		logger.Warn("配置中未找到路由规则")
+		return
 	}
 
 	for path, targetRules := range rules {
 		pattern := "^" + path + "$"
 		re, err := regexp.Compile(pattern)
 		if err != nil {
-			logger.Error("Failed to compile regex pattern",
+			logger.Error("编译正则表达式模式失败",
 				zap.String("path", path),
-				zap.Error(err),
-			)
+				zap.Error(err))
 			continue
 		}
-		targets := make([]string, len(targetRules))
-		for i, rule := range targetRules {
-			targets[i] = rule.Target
-		}
 		rr.rules[path] = re
-		logger.Info("Route registered in Regexp",
+		logger.Info("在 Regexp 中注册路由",
 			zap.String("path", path),
-			zap.Any("targets", targetRules),
-		)
+			zap.Any("targets", targetRules))
 	}
 
 	r.Use(func(c *gin.Context) {
 		path := c.Request.URL.Path
-		var targets []string
+		var targetRules config.RoutingRules
 		var found bool
 
 		for pattern, re := range rr.rules {
 			if re.MatchString(path) {
-				targetRules := cfg.Routing.Rules[pattern]
-				targets = make([]string, len(targetRules))
-				for i, rule := range targetRules {
-					targets[i] = rule.Target
-				}
+				targetRules = cfg.Routing.Rules[pattern]
 				found = true
 				break
 			}
 		}
 
 		if !found {
-			logger.Warn("Route not found",
+			logger.Warn("路由未找到",
 				zap.String("path", path),
-				zap.String("method", c.Request.Method),
-			)
-			c.JSON(http.StatusNotFound, gin.H{"error": "Route not found"})
+				zap.String("method", c.Request.Method))
+			c.JSON(http.StatusNotFound, gin.H{"error": "路由未找到"})
 			c.Abort()
 			return
 		}
 
-		target := rr.lb.SelectTarget(targets, c.Request)
-		if target == "" {
-			logger.Warn("No available targets",
-				zap.String("path", path),
-				zap.String("method", c.Request.Method),
-			)
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No available targets"})
-			c.Abort()
-			return
-		}
-
-		targetURL, err := url.Parse(target)
-		if err != nil {
-			logger.Error("Failed to parse target URL",
-				zap.String("path", path),
-				zap.String("target", target),
-				zap.Error(err),
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid target URL"})
-			c.Abort()
-			return
-		}
-
-		proxy := httputil.NewSingleHostReverseProxy(targetURL)
-		proxy.Director = defaultDirector(targetURL)
-		proxy.ErrorHandler = defaultErrorHandler(target)
-
-		logger.Debug("Routing request",
-			zap.String("path", path),
-			zap.String("target", target),
-			zap.String("method", c.Request.Method),
-		)
-		proxy.ServeHTTP(c.Writer, c.Request)
+		createProxyHandler(targetRules, rr.lb)(c)
 	})
 }

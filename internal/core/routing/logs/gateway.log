@@ -1,0 +1,5 @@
+{"level":"INFO","ts":"2025-03-10T16:32:11.301+0800","caller":"logger/zap.go:156","msg":"在 Regexp 中注册路由","path":"/test/.*","targets":[{"Target":"http://localhost:8081","Weight":0,"Env":""}]}
+{"level":"INFO","ts":"2025-03-10T16:32:11.302+0800","caller":"logger/zap.go:156","msg":"路由请求","path":"/test/abc","target":"http://localhost:8081","env":"","method":"GET"}
+{"level":"INFO","ts":"2025-03-10T16:33:29.931+0800","caller":"logger/zap.go:156","msg":"在 Regexp 中注册路由","path":"/test/.*","targets":[{"Target":"http://127.0.0.1:57957","Weight":0,"Env":""}]}
+{"level":"INFO","ts":"2025-03-10T16:33:29.932+0800","caller":"logger/zap.go:156","msg":"路由请求","path":"/test/abc","target":"http://127.0.0.1:57957","env":"","method":"GET"}
+{"level":"INFO","ts":"2025-03-10T16:46:02.305+0800","caller":"logger/zap.go:156","msg":"在 Trie 中插入路由","path":"/api/v1/user","rules":[{"Target":"http://localhost:8081","Weight":80,"Env":"stable"}]}

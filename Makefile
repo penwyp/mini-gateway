@@ -36,6 +36,7 @@ build: deps
 # 运行项目
 .PHONY: run
 run: build
+	@rm -f logs/gateway.log  # 清理日志文件
 	$(BIN_DIR)/$(BINARY_NAME)
 
 # 测试

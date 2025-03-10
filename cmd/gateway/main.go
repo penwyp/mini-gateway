@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -101,13 +99,13 @@ func main() {
 		}
 		if err := c.ShouldBindJSON(&creds); err != nil {
 			logger.Warn("无效的登录请求", zap.Error(err))
-			c.JSON(http.StatusBadRequest, gin.H{"error": "无效请求"})
+			c.JSON(400, gin.H{"error": "无效请求"})
 			return
 		}
 
 		if creds.Username != "admin" || creds.Password != "password" {
 			logger.Warn("登录失败", zap.String("username", creds.Username))
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "无效凭证"})
+			c.JSON(401, gin.H{"error": "无效凭证"})
 			return
 		}
 
@@ -115,20 +113,20 @@ func main() {
 			token, err := security.GenerateToken(creds.Username)
 			if err != nil {
 				logger.Error("生成JWT令牌失败", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器错误"})
+				c.JSON(500, gin.H{"error": "服务器错误"})
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"token": token})
+			c.JSON(200, gin.H{"token": token})
 		} else if cfg.Security.AuthMode == "rbac" {
 			token, err := security.GenerateRBACLoginToken(creds.Username)
 			if err != nil {
 				logger.Error("生成RBAC令牌失败", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器错误"})
+				c.JSON(500, gin.H{"error": "服务器错误"})
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"token": token, "username": creds.Username})
+			c.JSON(200, gin.H{"token": token, "username": creds.Username})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"message": "登录成功", "username": creds.Username})
+			c.JSON(200, gin.H{"message": "登录成功", "username": creds.Username})
 		}
 	})
 
@@ -142,28 +140,30 @@ func main() {
 		r.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
 	}
 
+	// 设置动态路由
 	protected := r.Group("/")
 	if cfg.Middleware.Auth {
 		protected.Use(middleware.Auth())
 	}
 	routing.Setup(protected, cfg)
-
-	// 创建HTTP服务器
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%s", cfg.Server.Port),
-		Handler: r,
+	// 为所有动态路由注册一个空处理器，交给具体 Router 处理
+	for path := range cfg.Routing.Rules {
+		protected.Any(path, func(c *gin.Context) {}) // 空处理器，依赖 TrieRouter 中间件
 	}
 
-	// 启动服务器
-	go func() {
-		logger.Info("服务器监听中", zap.String("address", srv.Addr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("启动服务器失败", zap.Error(err))
-			os.Exit(1)
-		}
-	}()
+	logger.Info("开始设置动态路由", zap.Any("routing_rules", cfg.Routing.Rules))
+	routing.Setup(r, cfg)
+	logger.Info("动态路由设置完成")
 
-	// 等待中断信号以优雅关闭
+	// 启动服务器
+	listenAddr := ":" + cfg.Server.Port
+	logger.Info("服务器开始监听", zap.String("address", listenAddr))
+	if err := r.Run(listenAddr); err != nil {
+		logger.Error("启动服务器失败", zap.Error(err))
+		os.Exit(1)
+	}
+
+	// 优雅关闭（仅在收到信号时执行清理）
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -174,9 +174,9 @@ func main() {
 		middleware.CleanupLeakyBucket(leakyLimiter)
 	}
 
-	// 同步日志并检查错误
+	// 同步日志
 	if err := logger.Sync(); err != nil {
-		fmt.Fprintf(os.Stderr, "日志同步失败: %v\n", err)
+		logger.Error("日志同步失败", zap.Error(err))
 		os.Exit(1)
 	}
 }

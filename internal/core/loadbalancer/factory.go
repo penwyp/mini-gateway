@@ -8,13 +8,13 @@ import (
 
 func NewLoadBalancer(algorithm string, cfg *config.Config) (LoadBalancer, error) {
 	switch algorithm {
-	case "round-robin":
+	case "round-robin", "round_robin":
 		return NewRoundRobin(), nil
 	case "ketama":
 		return NewKetama(160), nil
 	case "consul":
 		return NewConsulBalancer("localhost:8500")
-	case "weighted-round-robin":
+	case "weighted-round-robin", "weighted_round_robin":
 		rules := buildWeightedRoundRobinRules(cfg)
 		return NewWeightedRoundRobin(rules), nil
 	default:

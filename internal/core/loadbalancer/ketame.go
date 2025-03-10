@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync" // 新增 sync 包
 )
 
 type Ketama struct {
@@ -13,12 +14,14 @@ type Ketama struct {
 	hashRing []uint32
 	hashMap  map[uint32]string
 	replicas int
+	mu       sync.RWMutex // 添加读写锁
 }
 
 func NewKetama(replicas int) *Ketama {
 	return &Ketama{
 		replicas: replicas,
 		hashMap:  make(map[uint32]string),
+		mu:       sync.RWMutex{}, // 初始化锁
 	}
 }
 
@@ -27,9 +30,30 @@ func (k *Ketama) SelectTarget(targets []string, req *http.Request) string {
 		return ""
 	}
 
-	if len(k.nodes) != len(targets) {
-		k.buildRing(targets)
+	k.mu.RLock()
+	// 检查是否需要重建环
+	needRebuild := len(k.nodes) != len(targets)
+	if !needRebuild {
+		for i, node := range k.nodes {
+			if node != targets[i] {
+				needRebuild = true
+				break
+			}
+		}
 	}
+	k.mu.RUnlock()
+
+	if needRebuild {
+		k.mu.Lock()
+		// 双重检查，避免重复构建
+		if len(k.nodes) != len(targets) || !equalSlice(k.nodes, targets) {
+			k.buildRing(targets)
+		}
+		k.mu.Unlock()
+	}
+
+	k.mu.RLock()
+	defer k.mu.RUnlock()
 
 	if len(k.hashRing) == 0 {
 		return targets[0]
@@ -78,4 +102,17 @@ func (k *Ketama) findNearest(hash uint32) int {
 		return 0
 	}
 	return index
+}
+
+// 辅助函数：比较两个字符串切片是否相等
+func equalSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
