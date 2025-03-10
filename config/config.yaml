@@ -8,6 +8,7 @@ middleware:
   ipAcl: true
   antiInjection: true
   auth: true
+  breaker: true
 routing:
   rules:
     "/api/v1/user":
@@ -47,7 +48,12 @@ traffic:
   breaker:
     enabled: true
     errorRate: 0.5
-    timeout: 10
+    timeout: 1000
+    minRequests: 20
+    sleepWindow: 5000
+    maxConcurrent: 100
+    windowSize: 100
+    windowDuration: 10
 observability:
   prometheus:
     enabled: true

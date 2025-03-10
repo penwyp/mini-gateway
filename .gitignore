@@ -6,6 +6,7 @@
 .idea
 /bin
 /logs
+/data
 
 # User-specific stuff
 .idea/**/workspace.xml
@@ -13,6 +14,7 @@
 .idea/**/usage.statistics.xml
 .idea/**/dictionaries
 .idea/**/shelf
+.DS_Store
 
 # AWS User-specific
 .idea/**/aws.xml

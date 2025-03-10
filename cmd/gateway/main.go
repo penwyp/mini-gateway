@@ -6,14 +6,14 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
-
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/internal/core/routing"
 	"github.com/penwyp/mini-gateway/internal/core/security"
 	"github.com/penwyp/mini-gateway/internal/middleware"
 	"github.com/penwyp/mini-gateway/pkg/cache"
 	"github.com/penwyp/mini-gateway/pkg/logger"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/zap"
 )
 
 var (
@@ -52,7 +52,6 @@ func main() {
 
 	logger.Info("Gateway starting",
 		zap.String("port", cfg.Server.Port),
-		zap.String("configPath", "config/config.yaml"),
 		zap.String("version", Version),
 		zap.String("buildTime", BuildTime),
 		zap.String("gitCommit", GitCommit),
@@ -73,6 +72,9 @@ func main() {
 	}
 	if cfg.Middleware.AntiInjection {
 		r.Use(middleware.AntiInjection())
+	}
+	if cfg.Middleware.Breaker {
+		r.Use(middleware.Breaker())
 	}
 
 	r.POST("/login", func(c *gin.Context) {
@@ -119,6 +121,11 @@ func main() {
 		logger.Info("Health check requested", zap.String("clientIP", c.ClientIP()))
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// Prometheus 监控端点
+	if cfg.Observability.Prometheus.Enabled {
+		r.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
+	}
 
 	protected := r.Group("/")
 	if cfg.Middleware.Auth {

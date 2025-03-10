@@ -27,3 +27,6 @@ Content-Type: application/json
 }
 
 
+### metrics
+GET http://localhost:8080/metrics
+

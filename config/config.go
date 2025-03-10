@@ -28,6 +28,7 @@ type Middleware struct {
 	IPAcl         bool `mapstructure:"ipAcl"`         // IP ACL 中间件
 	AntiInjection bool `mapstructure:"antiInjection"` // 防注入中间件
 	Auth          bool `mapstructure:"auth"`          // 认证中间件
+	Breaker       bool `mapstructure:"breaker"`       // 熔断器开关
 }
 
 type Redis struct {
@@ -80,9 +81,14 @@ type TrafficRateLimit struct {
 }
 
 type TrafficBreaker struct {
-	Enabled   bool    `mapstructure:"enabled"`   // 是否启用熔断
-	ErrorRate float64 `mapstructure:"errorRate"` // 错误率阈值
-	Timeout   int     `mapstructure:"timeout"`   // 超时时间（秒）
+	Enabled        bool    `mapstructure:"enabled"`
+	ErrorRate      float64 `mapstructure:"errorRate"`
+	Timeout        int     `mapstructure:"timeout"`        // 毫秒
+	MinRequests    int     `mapstructure:"minRequests"`    // 最小请求数
+	SleepWindow    int     `mapstructure:"sleepWindow"`    // 毫秒
+	MaxConcurrent  int     `mapstructure:"maxConcurrent"`  // 最大并发数
+	WindowSize     int     `mapstructure:"windowSize"`     // 滑动窗口请求数
+	WindowDuration int     `mapstructure:"windowDuration"` // 滑动窗口时间（秒）
 }
 
 type Traffic struct {
@@ -177,6 +183,7 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("middleware.ipAcl", true)
 	v.SetDefault("middleware.antiInjection", true)
 	v.SetDefault("middleware.auth", true)
+	v.SetDefault("middleware.breaker", true)
 
 	// Cache
 	v.SetDefault("redis.addr", "localhost:6379")
@@ -197,8 +204,13 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("traffic.rateLimit.qps", 1000)
 	v.SetDefault("traffic.rateLimit.burst", 2000)
 	v.SetDefault("traffic.breaker.enabled", true)
-	v.SetDefault("traffic.breaker.errorRate", 0.5) // 50% 错误率触发熔断
-	v.SetDefault("traffic.breaker.timeout", 10)    // 10 秒超时
+	v.SetDefault("traffic.breaker.errorRate", 0.5)
+	v.SetDefault("traffic.breaker.timeout", 1000)
+	v.SetDefault("traffic.breaker.minRequests", 20)
+	v.SetDefault("traffic.breaker.sleepWindow", 5000)
+	v.SetDefault("traffic.breaker.maxConcurrent", 100)
+	v.SetDefault("traffic.breaker.windowSize", 100)
+	v.SetDefault("traffic.breaker.windowDuration", 10)
 
 	// Observability
 	v.SetDefault("observability.prometheus.enabled", true)
