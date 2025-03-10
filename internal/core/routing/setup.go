@@ -36,8 +36,20 @@ func validateRules(cfg *config.Config) {
 	}
 }
 
-// Setup 初始化路由引擎并设置路由规则
-func Setup(r gin.IRouter, cfg *config.Config) {
+// hasGRPCRule 检查是否有 gRPC 协议的路由规则
+func hasGRPCRule(cfg *config.Config) bool {
+	for _, rules := range cfg.Routing.Rules {
+		for _, rule := range rules {
+			if rule.Protocol == "grpc" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Setup 初始化路由引擎并设置路由规则，包括 gRPC 代理
+func Setup(protected *gin.RouterGroup, cfg *config.Config) {
 	logger.Info("加载路由规则", zap.Any("rules", cfg.Routing.Rules))
 	validateRules(cfg)
 
@@ -61,5 +73,14 @@ func Setup(r gin.IRouter, cfg *config.Config) {
 		router = NewGinRouter(cfg)
 	}
 
-	router.Setup(r, cfg)
+	// 设置普通 HTTP 路由
+	router.Setup(protected, cfg)
+
+	// 如果有 gRPC 规则，设置 gRPC 代理
+	if hasGRPCRule(cfg) {
+		// gRPC 代理需要访问底层的 *gin.Engine，因为它需要挂载独立的路由
+		mux := protected.Engine.(*gin.Engine)
+		SetupGRPCProxy(cfg, mux)   // HTTP 到 gRPC
+		StreamGRPCToHTTP(cfg, mux) // gRPC 到 HTTP 流式推送
+	}
 }

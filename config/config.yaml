@@ -65,3 +65,9 @@ observability:
 plugins:
   - "log"
   - "metrics"
+grpc:
+  enabled: true
+  healthCheckPath: "/grpc/health"
+  reflection: false
+  allowedOrigins:
+    - "*"
