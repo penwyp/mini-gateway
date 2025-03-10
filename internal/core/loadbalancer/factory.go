@@ -2,7 +2,6 @@ package loadbalancer
 
 import (
 	"fmt"
-
 	"github.com/penwyp/mini-gateway/config"
 )
 
@@ -24,7 +23,7 @@ func NewLoadBalancer(algorithm string, cfg *config.Config) (LoadBalancer, error)
 
 func buildWeightedRoundRobinRules(cfg *config.Config) map[string][]TargetWeight {
 	rules := make(map[string][]TargetWeight)
-	for path, targetRules := range cfg.Routing.Rules {
+	for path, targetRules := range cfg.Routing.GetHTTPRules() {
 		rules[path] = make([]TargetWeight, len(targetRules))
 		for i, rule := range targetRules {
 			rules[path][i] = TargetWeight{

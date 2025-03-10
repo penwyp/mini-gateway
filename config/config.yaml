@@ -9,6 +9,12 @@ middleware:
   antiInjection: false
   auth: false
   breaker: false
+grpc:
+  enabled: true
+  healthCheckPath: "/grpc/health"
+  reflection: false
+  allowedOrigins:
+    - "*"
 routing:
   rules:
     "/api/v1/user":
@@ -18,10 +24,18 @@ routing:
       - target: "http://localhost:8083"
         weight: 20
         env: "canary"
+    "/api/v2/hello/*path":
+      - target: "localhost:50051"
+        protocol: "grpc"
+        weight: 100
+    "/api/v3/hello":
+      - target: "localhost:50051"
+        protocol: "grpc"
+        weight: 100
     "/api/v1/order":
       - target: "http://localhost:8082"
         weight: 10
-  engine: "trie_regexp"
+  engine: "trie"
   loadBalancer: "round_robin"
 security:
   authMode: "jwt"

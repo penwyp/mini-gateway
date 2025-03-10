@@ -70,7 +70,7 @@ func (t *TrieRegexp) Insert(path string, rules config.RoutingRules) {
 	}
 	node.Rules = rules
 	node.IsEnd = true
-	logger.Info("在 Trie 中插入路由",
+	logger.Info("在 TrieRegexp 中插入路由",
 		zap.String("path", "/"+path),
 		zap.Any("rules", rules))
 }
@@ -96,7 +96,7 @@ func (t *TrieRegexp) Search(path string) (config.RoutingRules, bool) {
 }
 
 func (tr *TrieRegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
-	rules := cfg.Routing.Rules
+	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
 		logger.Warn("配置中未找到路由规则")
 		return

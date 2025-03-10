@@ -104,6 +104,10 @@ version:
 run-test-services:
 	$(GO) run test/services.go
 
+.PHONY: run-hello-grpc
+run-hello-grpc:
+	$(GO) run cmd/helloserver/main.go
+
 .PHONY: setup-consul
 setup-consul:
 	@echo "Checking if Consul is installed..."
@@ -116,3 +120,19 @@ setup-consul:
 	echo "Consul test environment setup complete."; \
 	echo "Load balancer rules:"; \
 	curl http://localhost:8500/v1/kv/gateway/loadbalancer/rules?raw
+
+
+# 生成 protobuf 文件
+.PHONY: proto
+proto:
+	protoc -I . \
+		-I /Users/penwyp/Dat/googleapis \
+		--go_out=./proto \
+		--go_opt=paths=source_relative \
+		--go-grpc_out=./proto \
+		--go-grpc_opt=paths=source_relative \
+		--grpc-gateway_out=./proto \
+		--grpc-gateway_opt=paths=source_relative \
+		--grpc-gateway_opt generate_unbound_methods=true \
+		--plugin=protoc-gen-grpc-gateway=$(shell go env GOPATH)/bin/protoc-gen-grpc-gateway \
+		./proto/hello.proto

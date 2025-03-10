@@ -21,6 +21,14 @@ type Config struct {
 	Logger        Logger        `mapstructure:"logger"`  // 新增日志配置
 	Cache         Redis         `mapstructure:"cache"`
 	Middleware    Middleware    `mapstructure:"middleware"` // 新增中间件配置
+	GRPC          GRPCConfig    `mapstructure:"grpc"`
+}
+
+type GRPCConfig struct {
+	Enabled         bool     `mapstructure:"enabled"`
+	HealthCheckPath string   `mapstructure:"healthCheckPath"`
+	Reflection      bool     `mapstructure:"reflection"`
+	AllowedOrigins  []string `mapstructure:"allowedOrigins"`
 }
 
 type Middleware struct {
@@ -38,17 +46,47 @@ type Redis struct {
 }
 
 type RoutingRule struct {
-	Target string `mapstructure:"target"`
-	Weight int    `mapstructure:"weight"`
-	Env    string `mapstructure:"env"` // 新增字段，标记环境（stable/canary）
+	Target   string `mapstructure:"target"`
+	Weight   int    `mapstructure:"weight"`
+	Env      string `mapstructure:"env"`
+	Protocol string `mapstructure:"protocol"` // 标记协议类型（http/grpc）
 }
-
 type RoutingRules []RoutingRule
+
+func (i RoutingRules) HasGrpcRule() bool {
+	for _, rule := range i {
+		if rule.Protocol == "grpc" {
+			return true
+		}
+	}
+	return false
+}
 
 type Routing struct {
 	Rules        map[string]RoutingRules `mapstructure:"rules"`
 	Engine       string                  `mapstructure:"engine"`
 	LoadBalancer string                  `mapstructure:"loadBalancer"`
+}
+
+func (i Routing) GetGrpcRules() map[string]RoutingRules {
+	grpcRules := make(map[string]RoutingRules)
+	for path, rules := range i.Rules {
+		if rules.HasGrpcRule() {
+			grpcRules[path] = rules
+		}
+	}
+	return grpcRules
+
+}
+
+func (i Routing) GetHTTPRules() map[string]RoutingRules {
+	httpRules := make(map[string]RoutingRules)
+	for path, rules := range i.Rules {
+		if !rules.HasGrpcRule() {
+			httpRules[path] = rules
+		}
+	}
+	return httpRules
 }
 
 type Server struct {
@@ -227,6 +265,12 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("logger.maxBackups", 10) // 保留 10 个备份
 	v.SetDefault("logger.maxAge", 30)     // 保留 30 天
 	v.SetDefault("logger.compress", true) // 压缩旧日志
+
+	// GRPC
+	v.SetDefault("grpc.enabled", true)
+	v.SetDefault("grpc.healthCheckPath", "/grpc/health")
+	v.SetDefault("grpc.reflection", false)
+	v.SetDefault("grpc.allowedOrigins", []string{"*"})
 }
 
 // InitConfig 初始化配置（供 main 函数调用）

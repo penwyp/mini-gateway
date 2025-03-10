@@ -25,7 +25,23 @@ func validateRules(cfg *config.Config) {
 	engine := cfg.Routing.Engine
 	rules := cfg.Routing.Rules
 
-	for path := range rules {
+	for path, pathEndpoints := range rules {
+		var shouldContinue bool
+		for _, endpoint := range pathEndpoints {
+			if endpoint.Protocol == "grpc" {
+				shouldContinue = true
+				break
+			}
+			if engine == "trie" && isRegexPattern(path) {
+				logger.Error("Trie 路由引擎不支持正则表达式路径",
+					zap.String("path", path),
+					zap.String("hint", "请使用 'trie-regexp' 或 'regexp' 引擎支持正则路由"))
+				os.Exit(1)
+			}
+		}
+		if shouldContinue {
+			continue
+		}
 		if isRegexPattern(path) && engine != "trie-regexp" && engine != "regexp" {
 			logger.Error("路由引擎与正则表达式路径不兼容",
 				zap.String("engine", engine),
@@ -36,8 +52,8 @@ func validateRules(cfg *config.Config) {
 	}
 }
 
-// Setup 初始化路由引擎并设置路由规则
-func Setup(r gin.IRouter, cfg *config.Config) {
+// Setup 初始化路由引擎并设置路由规则，包括 gRPC 代理
+func Setup(protected gin.IRouter, cfg *config.Config) {
 	logger.Info("加载路由规则", zap.Any("rules", cfg.Routing.Rules))
 	validateRules(cfg)
 
@@ -61,5 +77,23 @@ func Setup(r gin.IRouter, cfg *config.Config) {
 		router = NewGinRouter(cfg)
 	}
 
-	router.Setup(r, cfg)
+	grpcGroup := protected.Group("/grpc")
+
+	// 设置 HTTP 路由
+	router.Setup(protected, cfg)
+
+	// 设置 grpc 路由
+	if cfg.GRPC.Enabled && len(cfg.Routing.GetGrpcRules()) > 0 {
+		// gRPC 代理需要访问底层的 *gin.Engine，因为它需要挂载独立的路由
+		SetupGRPCProxy(cfg, grpcGroup) // HTTP 到 gRPC
+		//SetupGRPCProxy(cfg, protected) // HTTP 到 gRPC
+	}
+
+	switch cfg.Routing.Engine {
+	case "trie", "trie_regexp", "regexp":
+		// 为所有动态路由注册一个空处理器，交给具体 Router 处理
+		for p := range cfg.Routing.GetHTTPRules() {
+			protected.Any(p, func(c *gin.Context) {}) // 空处理器，依赖 TrieRouter 中间件
+		}
+	}
 }

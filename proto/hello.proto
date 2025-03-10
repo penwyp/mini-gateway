@@ -1,0 +1,35 @@
+syntax = "proto3";
+package hello;
+option go_package = "./proto";
+
+import "google/api/annotations.proto";
+
+// 定义示例服务
+service HelloService {
+  rpc SayHello (HelloRequest) returns (HelloResponse) {
+    option (google.api.http) = {
+      post: "/grpc/api/v2/hello"
+      body: "*"
+    };
+  }
+
+  rpc GetHello (HelloRequest) returns (HelloResponse) {
+    option (google.api.http) = {
+      get: "/grpc/api/v2/hello"
+    };
+  }
+
+  rpc ReplyHello (HelloRequest) returns (HelloResponse) {
+    option (google.api.http) = {
+      get: "/grpc/api/v3/hello"
+    };
+  }
+}
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloResponse {
+  string message = 1;
+}
+

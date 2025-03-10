@@ -29,7 +29,7 @@ func NewRegexpRouter(cfg *config.Config) *RegexpRouter {
 }
 
 func (rr *RegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
-	rules := cfg.Routing.Rules
+	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
 		logger.Warn("配置中未找到路由规则")
 		return

@@ -140,19 +140,14 @@ func main() {
 		r.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
 	}
 
+	logger.Info("开始设置动态路由", zap.Any("routing_rules", cfg.Routing.Rules))
 	// 设置动态路由
 	protected := r.Group("/")
 	if cfg.Middleware.Auth {
 		protected.Use(middleware.Auth())
 	}
-	routing.Setup(protected, cfg)
-	// 为所有动态路由注册一个空处理器，交给具体 Router 处理
-	for path := range cfg.Routing.Rules {
-		protected.Any(path, func(c *gin.Context) {}) // 空处理器，依赖 TrieRouter 中间件
-	}
 
-	logger.Info("开始设置动态路由", zap.Any("routing_rules", cfg.Routing.Rules))
-	routing.Setup(r, cfg)
+	routing.Setup(protected, cfg)
 	logger.Info("动态路由设置完成")
 
 	// 启动服务器
