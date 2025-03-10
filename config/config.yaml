@@ -3,6 +3,11 @@ server:
 logger:
   level: "debug"
   filePath: "logs/gateway.log"
+middleware:
+  rateLimit: true
+  ipAcl: true
+  antiInjection: true
+  auth: true
 routing:
   rules:
     "/api/v1/user":
@@ -16,7 +21,7 @@ routing:
   engine: "gin"
   loadBalancer: "round_robin"
 security:
-  authMode: "rbac"
+  authMode: "jwt"
   jwt:
     secret: "change-to-your-secret-key"
     expiresIn: 7200000
@@ -29,6 +34,11 @@ security:
     - "192.168.1.100"
   ipWhitelist:
     - "127.0.0.1"
+  ipUpdateMode: "override" # 可选值：override（覆盖）或 append（追加）
+cache:
+  addr: "10.2.103.35:6379"
+  password: ""
+  db: 0
 traffic:
   rateLimit:
     enabled: true

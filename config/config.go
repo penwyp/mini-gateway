@@ -19,6 +19,21 @@ type Config struct {
 	Observability Observability `mapstructure:"observability"`
 	Plugins       []string      `mapstructure:"plugins"` // 插件列表
 	Logger        Logger        `mapstructure:"logger"`  // 新增日志配置
+	Cache         Redis         `mapstructure:"cache"`
+	Middleware    Middleware    `mapstructure:"middleware"` // 新增中间件配置
+}
+
+type Middleware struct {
+	RateLimit     bool `mapstructure:"rateLimit"`     // 限流中间件
+	IPAcl         bool `mapstructure:"ipAcl"`         // IP ACL 中间件
+	AntiInjection bool `mapstructure:"antiInjection"` // 防注入中间件
+	Auth          bool `mapstructure:"auth"`          // 认证中间件
+}
+
+type Redis struct {
+	Addr     string `mapstructure:"addr"`
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
 }
 
 type RoutingRules []RoutingRule
@@ -44,11 +59,12 @@ type JWT struct {
 }
 
 type Security struct {
-	AuthMode    string   `mapstructure:"authMode"` // 认证模式（如：JWT、OAuth2 等）
-	JWT         JWT      `mapstructure:"jwt"`
-	RBAC        RBAC     `mapstructure:"rbac"`
-	IPBlacklist []string `mapstructure:"ipBlacklist"` // IP 黑名单
-	IPWhitelist []string `mapstructure:"ipWhitelist"` // IP 白名单
+	AuthMode     string   `mapstructure:"authMode"` // 认证模式（如：JWT、OAuth2 等）
+	JWT          JWT      `mapstructure:"jwt"`
+	RBAC         RBAC     `mapstructure:"rbac"`
+	IPBlacklist  []string `mapstructure:"ipBlacklist"`  // IP 黑名单
+	IPWhitelist  []string `mapstructure:"ipWhitelist"`  // IP 白名单
+	IPUpdateMode string   `mapstructure:"ipUpdateMode"` // 新增：覆盖（override）或追加（append）
 }
 
 type RBAC struct {
@@ -155,14 +171,26 @@ func setDefaultValues(v *viper.Viper) {
 	// Routing
 	v.SetDefault("routing.engine", "gin")               // 默认使用 Gin 路由
 	v.SetDefault("routing.loadBalancer", "round-robin") // 默认轮询
-	v.SetDefault("security.authMode", "none")           // 默认无认证
-	v.SetDefault("security.rbac.enabled", false)
-	v.SetDefault("security.rbac.modelPath", "config/data/rbac_model.conf")
-	v.SetDefault("security.rbac.policyPath", "config/data/rbac_policy.csv")
+
+	// 中间件默认启用
+	v.SetDefault("middleware.rateLimit", true)
+	v.SetDefault("middleware.ipAcl", true)
+	v.SetDefault("middleware.antiInjection", true)
+	v.SetDefault("middleware.auth", true)
+
+	// Cache
+	v.SetDefault("redis.addr", "localhost:6379")
+	v.SetDefault("redis.password", "")
+	v.SetDefault("redis.db", 0)
 
 	// Security
 	v.SetDefault("security.jwt.secret", "default-secret-key")
 	v.SetDefault("security.jwt.expiresIn", 3600) // 默认 1 小时
+	v.SetDefault("security.authMode", "none")    // 默认无认证
+	v.SetDefault("security.rbac.enabled", false)
+	v.SetDefault("security.rbac.modelPath", "config/data/rbac_model.conf")
+	v.SetDefault("security.rbac.policyPath", "config/data/rbac_policy.csv")
+	v.SetDefault("security.ipUpdateMode", "override") // 默认覆盖更新
 
 	// Traffic
 	v.SetDefault("traffic.rateLimit.enabled", true)

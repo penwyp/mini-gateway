@@ -12,6 +12,7 @@ import (
 	"github.com/penwyp/mini-gateway/internal/core/routing"
 	"github.com/penwyp/mini-gateway/internal/core/security"
 	"github.com/penwyp/mini-gateway/internal/middleware"
+	"github.com/penwyp/mini-gateway/pkg/cache"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 )
 
@@ -34,9 +35,15 @@ func main() {
 		Compress:   cfg.Logger.Compress,
 	})
 
-	if cfg.Routing.LoadBalancer != "consul" && len(cfg.Routing.Rules) == 0 {
+	if cfg.Routing.LoadBalancer != "consul" && (cfg.Routing.Rules == nil || len(cfg.Routing.Rules) == 0) {
 		logger.Error("Routing rules are empty or not defined in configuration")
 		os.Exit(1)
+	}
+
+	// 初始化 Redis 和 IP 规则
+	cache.Init(cfg)
+	if cfg.Middleware.IPAcl {
+		middleware.InitIPRules(cfg)
 	}
 
 	if cfg.Security.AuthMode == "rbac" && cfg.Security.RBAC.Enabled {
@@ -51,13 +58,23 @@ func main() {
 		zap.String("gitCommit", GitCommit),
 		zap.String("goVersion", GoVersion),
 		zap.Any("routingRules", cfg.Routing.Rules),
-		zap.Bool("jwtEnabled", cfg.Security.JWT.Enabled),
+		zap.String("authMode", cfg.Security.AuthMode),
+		zap.Bool("rbacEnabled", cfg.Security.RBAC.Enabled),
 	)
 
 	r := gin.Default()
-	r.Use(middleware.RateLimit()) // 全局只保留速率限制
 
-	// 无认证路由组
+	// 根据配置动态应用中间件
+	if cfg.Middleware.RateLimit {
+		r.Use(middleware.RateLimit())
+	}
+	if cfg.Middleware.IPAcl {
+		r.Use(middleware.IPAcl())
+	}
+	if cfg.Middleware.AntiInjection {
+		r.Use(middleware.AntiInjection())
+	}
+
 	r.POST("/login", func(c *gin.Context) {
 		var creds struct {
 			Username string `json:"username" binding:"required"`
@@ -98,15 +115,15 @@ func main() {
 		}
 	})
 
-	// 健康检查路由
 	r.GET("/health", func(c *gin.Context) {
 		logger.Info("Health check requested", zap.String("clientIP", c.ClientIP()))
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// 受保护路由组
 	protected := r.Group("/")
-	protected.Use(middleware.Auth())
+	if cfg.Middleware.Auth {
+		protected.Use(middleware.Auth())
+	}
 	routing.Setup(protected, cfg)
 
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
