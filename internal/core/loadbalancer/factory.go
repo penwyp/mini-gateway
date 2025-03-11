@@ -2,6 +2,7 @@ package loadbalancer
 
 import (
 	"fmt"
+
 	"github.com/penwyp/mini-gateway/config"
 )
 
@@ -12,7 +13,7 @@ func NewLoadBalancer(algorithm string, cfg *config.Config) (LoadBalancer, error)
 	case "ketama":
 		return NewKetama(160), nil
 	case "consul":
-		return NewConsulBalancer("localhost:8500")
+		return NewConsulBalancer(cfg.Consul.Addr)
 	case "weighted-round-robin", "weighted_round_robin":
 		rules := buildWeightedRoundRobinRules(cfg)
 		return NewWeightedRoundRobin(rules), nil

@@ -1,9 +1,16 @@
 package loadbalancer
 
 import (
+	"github.com/penwyp/mini-gateway/pkg/logger"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 	"net/http"
 	"sync"
 )
+
+var wrrTracer = otel.Tracer("loadbalancer:weighted-round-robin") // 定义负载均衡模块的 Tracer
 
 // TargetWeight 定义目标及其权重
 type TargetWeight struct {
@@ -57,13 +64,22 @@ func (wrr *WeightedRoundRobin) SelectTarget(targets []string, req *http.Request)
 	wrr.mu.Lock()
 	defer wrr.mu.Unlock()
 
+	// 开始追踪负载均衡选择
+	_, span := wrrTracer.Start(req.Context(), "LoadBalancer.Select",
+		trace.WithAttributes(attribute.Int("target_count", len(targets))))
+	defer span.End()
+
 	// 如果传入的目标为空，返回空
 	if len(targets) == 0 {
+		span.SetAttributes(attribute.String("result", "no targets"))
 		return ""
 	}
 
 	// 如果传入的目标只有一个，直接返回
 	if len(targets) == 1 {
+		// 记录选择的目标
+		span.SetAttributes(attribute.String("selected_target", targets[0]))
+		logger.Debug("负载均衡选择的目标", zap.String("target", targets[0]))
 		return targets[0]
 	}
 
@@ -77,7 +93,12 @@ func (wrr *WeightedRoundRobin) SelectTarget(targets []string, req *http.Request)
 			count = state.currentCount
 			state.currentCount = (state.currentCount + 1) % len(targets)
 		}
-		return targets[count%len(targets)]
+		target := targets[count%len(targets)]
+		// 记录选择的目标
+		span.SetAttributes(attribute.String("selected_target", target))
+		logger.Debug("负载均衡选择的目标", zap.String("target", target))
+
+		return target
 	}
 
 	// 加权轮询算法（仅使用预定义的 state.targets）
@@ -95,10 +116,20 @@ func (wrr *WeightedRoundRobin) SelectTarget(targets []string, req *http.Request)
 	for i := 0; i < n; i++ {
 		cumulativeWeight += state.weights[i]
 		if current < cumulativeWeight {
+
+			target := state.targets[i]
+			// 记录选择的目标
+			span.SetAttributes(attribute.String("selected_target", target))
+			logger.Debug("负载均衡选择的目标", zap.String("target", target))
+
 			return state.targets[i]
 		}
 	}
 
 	// 理论上不会到达这里，但作为回退返回第一个目标
-	return state.targets[0]
+	target := state.targets[0]
+	span.SetAttributes(attribute.String("selected_target", target))
+	logger.Debug("负载均衡选择的目标", zap.String("target", target))
+
+	return target
 }

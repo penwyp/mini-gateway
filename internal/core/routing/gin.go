@@ -32,6 +32,7 @@ func (gr *GinRouter) Setup(r gin.IRouter, cfg *config.Config) {
 		logger.Info("在 Gin 中注册路由",
 			zap.String("path", path),
 			zap.Any("targets", targetRules))
+
 		r.Any(path, createProxyHandler(targetRules, gr.lb))
 	}
 }

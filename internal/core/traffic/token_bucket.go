@@ -1,6 +1,11 @@
-package middleware
+package traffic
 
 import (
+	"github.com/penwyp/mini-gateway/internal/core/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"time"
 
@@ -10,6 +15,8 @@ import (
 	uberRatelimit "go.uber.org/ratelimit"
 	"go.uber.org/zap"
 )
+
+var tokenBucketTracer = otel.Tracer("ratelimit:token-bucket") // 定义限流模块的 Tracer
 
 // TokenBucketLimiter 令牌桶限流器，实现 uber-go/ratelimit 的 Limiter 接口
 type TokenBucketLimiter struct {
@@ -49,6 +56,10 @@ func TokenBucketRateLimit() gin.HandlerFunc {
 			return
 		}
 
+		_, span := tokenBucketTracer.Start(c.Request.Context(), "RateLimit.TokenBucket",
+			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
+		defer span.End()
+
 		// 获取当前时间
 		now := time.Now()
 		// 调用Take方法，可能阻塞以满足速率限制
@@ -66,6 +77,9 @@ func TokenBucketRateLimit() gin.HandlerFunc {
 				zap.Int("qps", cfg.Traffic.RateLimit.QPS),
 				zap.Int("burst", cfg.Traffic.RateLimit.Burst),
 			)
+
+			span.SetStatus(codes.Error, "Rate limit exceeded")
+			observability.RateLimitRejections.WithLabelValues(c.Request.URL.Path).Inc()
 
 			// 返回429 Too Many Requests
 			c.JSON(http.StatusTooManyRequests, gin.H{
@@ -86,6 +100,7 @@ func TokenBucketRateLimit() gin.HandlerFunc {
 			zap.Int("qps", cfg.Traffic.RateLimit.QPS),
 			zap.Int("burst", cfg.Traffic.RateLimit.Burst),
 		)
+		span.SetStatus(codes.Ok, "Request allowed")
 		c.Next()
 	}
 }

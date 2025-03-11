@@ -1,6 +1,11 @@
-package middleware
+package traffic
 
 import (
+	"github.com/penwyp/mini-gateway/internal/core/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"sync"
 	"time"
@@ -10,6 +15,8 @@ import (
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 )
+
+var leakyBucketTracer = otel.Tracer("ratelimit:leaky-bucket")
 
 // LeakyBucketLimiter 漏桶限流器
 type LeakyBucketLimiter struct {
@@ -97,6 +104,10 @@ func LeakyBucketRateLimit() gin.HandlerFunc {
 			return
 		}
 
+		_, span := leakyBucketTracer.Start(c.Request.Context(), "RateLimit.TokenBucket",
+			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
+		defer span.End()
+
 		// 尝试将请求加入桶中
 		if !limiter.Allow() {
 			// 记录限流日志
@@ -106,6 +117,9 @@ func LeakyBucketRateLimit() gin.HandlerFunc {
 				zap.Int("qps", cfg.Traffic.RateLimit.QPS),
 				zap.Int("burst", cfg.Traffic.RateLimit.Burst),
 			)
+
+			span.SetStatus(codes.Error, "Rate limit exceeded")
+			observability.RateLimitRejections.WithLabelValues(c.Request.URL.Path).Inc()
 
 			// 返回429 Too Many Requests
 			c.JSON(http.StatusTooManyRequests, gin.H{
@@ -118,6 +132,7 @@ func LeakyBucketRateLimit() gin.HandlerFunc {
 		}
 
 		// 成功加入桶，继续处理请求
+		span.SetStatus(codes.Ok, "Request allowed")
 		c.Next()
 	}
 }

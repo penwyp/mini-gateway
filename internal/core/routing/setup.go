@@ -52,7 +52,10 @@ func validateRules(cfg *config.Config) {
 	}
 }
 
-// Setup 初始化路由引擎并设置路由规则，包括 gRPC 代理
+// wsProxy 全局变量，用于管理 WebSocket 代理
+var wsProxy *WebSocketProxy
+
+// Setup 初始化路由引擎并设置路由规则，包括 gRPC 和 WebSocket 代理
 func Setup(protected gin.IRouter, cfg *config.Config) {
 	logger.Info("加载路由规则", zap.Any("rules", cfg.Routing.Rules))
 	validateRules(cfg)
@@ -77,16 +80,22 @@ func Setup(protected gin.IRouter, cfg *config.Config) {
 		router = NewGinRouter(cfg)
 	}
 
-	grpcGroup := protected.Group("/grpc")
+	grpcGroup := protected.Group(cfg.GRPC.Prefix)    // 修改：使用配置中的前缀
+	wsGroup := protected.Group(cfg.WebSocket.Prefix) // 修改：使用配置中的前缀
 
 	// 设置 HTTP 路由
 	router.Setup(protected, cfg)
 
-	// 设置 grpc 路由
+	// 设置 gRPC 路由
 	if cfg.GRPC.Enabled && len(cfg.Routing.GetGrpcRules()) > 0 {
-		// gRPC 代理需要访问底层的 *gin.Engine，因为它需要挂载独立的路由
 		SetupGRPCProxy(cfg, grpcGroup) // HTTP 到 gRPC
-		//SetupGRPCProxy(cfg, protected) // HTTP 到 gRPC
+	}
+
+	// 设置 WebSocket 路由
+	if cfg.WebSocket.Enabled && len(cfg.Routing.GetWebSocketRules()) > 0 {
+		wsProxy = NewWebSocketProxy(cfg)
+		wsProxy.SetupWebSocketProxy(wsGroup, cfg)
+		logger.Info("WebSocket 代理已设置")
 	}
 
 	switch cfg.Routing.Engine {
@@ -95,5 +104,13 @@ func Setup(protected gin.IRouter, cfg *config.Config) {
 		for p := range cfg.Routing.GetHTTPRules() {
 			protected.Any(p, func(c *gin.Context) {}) // 空处理器，依赖 TrieRouter 中间件
 		}
+	}
+}
+
+// Cleanup 清理 WebSocket 资源
+func Cleanup() {
+	if wsProxy != nil {
+		wsProxy.Close()
+		logger.Info("WebSocket 代理资源已清理")
 	}
 }

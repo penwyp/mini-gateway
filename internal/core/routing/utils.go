@@ -36,16 +36,3 @@ func defaultDirector(targetURL *url.URL) func(req *http.Request) {
 		)
 	}
 }
-
-// defaultErrorHandler 创建默认的代理错误处理函数
-func defaultErrorHandler(target string) func(w http.ResponseWriter, r *http.Request, err error) {
-	return func(w http.ResponseWriter, r *http.Request, err error) {
-		logger.Error("代理请求失败",
-			zap.String("path", r.URL.Path),
-			zap.String("target", target),
-			zap.Error(err),
-		)
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte("Bad Gateway"))
-	}
-}

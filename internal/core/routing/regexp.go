@@ -1,6 +1,10 @@
 package routing
 
 import (
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"regexp"
 
@@ -10,6 +14,8 @@ import (
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 )
+
+var regexpTracer = otel.Tracer("router:regexp") // 定义路由模块的 Tracer
 
 type RegexpRouter struct {
 	rules map[string]*regexp.Regexp
@@ -51,6 +57,11 @@ func (rr *RegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	}
 
 	r.Use(func(c *gin.Context) {
+		// 开始追踪路由匹配
+		ctx, span := regexpTracer.Start(c.Request.Context(), "Routing.Match",
+			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
+		defer span.End()
+
 		path := c.Request.URL.Path
 		var targetRules config.RoutingRules
 		var found bool
@@ -72,6 +83,13 @@ func (rr *RegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
 			return
 		}
 
+		// 记录匹配成功的目标
+		span.SetAttributes(attribute.String("matched_target", targetRules[0].Target))
+		span.SetStatus(codes.Ok, "Route matched")
+		logger.Info("路由匹配成功", zap.String("path", path), zap.Any("rules", targetRules))
+
+		// 将追踪上下文传递给下游
+		c.Request = c.Request.WithContext(ctx)
 		createProxyHandler(targetRules, rr.lb)(c)
 	})
 }

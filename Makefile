@@ -17,6 +17,11 @@ GOLINT = golangci-lint
 DOCKER = docker
 WRK = wrk
 
+# 监控相关
+GRAFANA_PROVISIONING_DIR = test/docker/grafana/provisioning
+DASHBOARD_SOURCE = test/docker/prometheus.dashboard.txt
+DASHBOARD_DEST = test/docker/grafana/dashboards/gateway.json
+
 # 默认目标
 .PHONY: all
 all: build
@@ -100,13 +105,23 @@ version:
 	@echo "Git Commit: $(GIT_COMMIT)"
 	@echo "Go Version: $(GO_VERSION)"
 
-.PHONY: run-test-services
-run-test-services:
-	$(GO) run test/services.go
+.PHONY: manage-test-start
+manage-test-start:
+	chmod +x ./test/manage_test_services.sh
+	@echo "Starting test services via script..."
+	@./test/manage_test_services.sh start
 
-.PHONY: run-hello-grpc
-run-hello-grpc:
-	$(GO) run cmd/helloserver/main.go
+.PHONY: manage-test-stop
+manage-test-stop:
+	chmod +x ./test/manage_test_services.sh
+	@echo "Stopping test services via script..."
+	@./test/manage_test_services.sh stop
+
+.PHONY: manage-test-status
+manage-test-status:
+	chmod +x ./test/manage_test_services.sh
+	@echo "Checking test services status via script..."
+	@./test/manage_test_services.sh status
 
 .PHONY: setup-consul
 setup-consul:
@@ -116,7 +131,7 @@ setup-consul:
 	@consul agent -dev & \
 	sleep 2; \
 	echo "Pushing load balancer rules to Consul KV Store..."; \
-	curl -X PUT -d '{"/api/v1/user": ["http://localhost:8081", "http://localhost:8083"], "/api/v1/order": ["http://localhost:8082"]}' http://localhost:8500/v1/kv/gateway/loadbalancer/rules; \
+	curl -X PUT -d '{"/api/v1/user": ["http://localhost:8381", "http://localhost:8383"], "/api/v1/order": ["http://localhost:8382"]}' http://localhost:8500/v1/kv/gateway/loadbalancer/rules; \
 	echo "Consul test environment setup complete."; \
 	echo "Load balancer rules:"; \
 	curl http://localhost:8500/v1/kv/gateway/loadbalancer/rules?raw
@@ -136,3 +151,21 @@ proto:
 		--grpc-gateway_opt generate_unbound_methods=true \
 		--plugin=protoc-gen-grpc-gateway=$(shell go env GOPATH)/bin/protoc-gen-grpc-gateway \
 		./proto/hello.proto
+
+# 设置 Grafana 配置
+.PHONY: setup-grafana
+setup-grafana:
+	chmod +x test/docker/setup_grafana.sh
+	@./test/docker/setup_grafana.sh
+
+# 启动监控服务
+.PHONY: setup-monitoring
+setup-monitoring:
+	chmod +x test/docker/setup_monitoring.sh
+	@./test/docker/setup_monitoring.sh
+
+# 停止监控服务
+.PHONY: stop-monitoring
+stop-monitoring:
+	@docker-compose -f test/docker/docker-compose.yml down
+	@echo "监控服务已停止"

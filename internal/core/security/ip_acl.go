@@ -1,7 +1,8 @@
-package middleware
+package security
 
 import (
 	"context"
+	"github.com/penwyp/mini-gateway/internal/core/observability"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -36,6 +37,7 @@ func IPAcl() gin.HandlerFunc {
 				return
 			}
 			logger.Warn("IP not in whitelist", zap.String("ip", clientIP))
+			observability.IPAclRejections.WithLabelValues(c.Request.URL.Path, clientIP).Inc()
 			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied by IP whitelist"})
 			c.Abort()
 			return
@@ -49,6 +51,7 @@ func IPAcl() gin.HandlerFunc {
 			}
 			if isBlacklisted {
 				logger.Warn("IP blocked by blacklist", zap.String("ip", clientIP))
+				observability.IPAclRejections.WithLabelValues(c.Request.URL.Path, clientIP).Inc()
 				c.JSON(http.StatusForbidden, gin.H{"error": "Access denied by IP blacklist"})
 				c.Abort()
 				return

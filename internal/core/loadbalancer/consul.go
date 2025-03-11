@@ -3,6 +3,9 @@ package loadbalancer
 import (
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"sync"
 	"time"
@@ -11,6 +14,8 @@ import (
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 )
+
+var cTracer = otel.Tracer("loadbalancer:consu") // 定义负载均衡模块的 Tracer
 
 type ConsulBalancer struct {
 	client *api.Client
@@ -40,11 +45,19 @@ func (cb *ConsulBalancer) SelectTarget(targets []string, req *http.Request) stri
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 
+	// 开始追踪负载均衡选择
+	_, span := cTracer.Start(req.Context(), "LoadBalancer.Select",
+		trace.WithAttributes(attribute.Int("target_count", len(targets))))
+	defer span.End()
+
 	path := req.URL.Path
 	if targets, ok := cb.rules[path]; ok && len(targets) > 0 {
 		count := uint32(len(targets))
 		index := uint32(time.Now().UnixNano()) % count
-		return targets[index]
+		target := targets[index]
+		span.SetAttributes(attribute.String("selected_target", target))
+		logger.Debug("负载均衡选择的目标", zap.String("target", target))
+		return target
 	}
 
 	if len(targets) == 0 {
@@ -52,7 +65,11 @@ func (cb *ConsulBalancer) SelectTarget(targets []string, req *http.Request) stri
 	}
 	count := uint32(len(targets))
 	index := uint32(time.Now().UnixNano()) % count
-	return targets[index]
+	target := targets[index]
+	span.SetAttributes(attribute.String("selected_target", target))
+	logger.Debug("负载均衡选择的目标", zap.String("target", target))
+	return target
+
 }
 
 func (cb *ConsulBalancer) watchRules() {

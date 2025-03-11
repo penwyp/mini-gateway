@@ -1,5 +1,5 @@
 server:
-  port: "8080"
+  port: "8380"
 logger:
   level: "debug"
   filePath: "logs/gateway.log"
@@ -9,31 +9,42 @@ middleware:
   antiInjection: false
   auth: false
   breaker: false
+  tracing: true
 grpc:
   enabled: true
+  prefix: "/grpc"  # gRPC 路由前缀，可自定义
   healthCheckPath: "/grpc/health"
   reflection: false
   allowedOrigins:
     - "*"
+websocket:
+  enabled: true
+  maxIdleConns: 10
+  idleTimeout: 5m
+  prefix: "/websocket"  # 新增：WebSocket 路由前缀，可自定义
 routing:
   rules:
+    "/ws/chat":
+      - target: "ws://127.0.0.1:8392"
+        weight: 100
+        protocol: "websocket"
     "/api/v1/user":
-      - target: "http://localhost:8081"
+      - target: "http://127.0.0.1:8381"
         weight: 80
         env: "stable"
-      - target: "http://localhost:8083"
+      - target: "http://127.0.0.1:8383"
         weight: 20
         env: "canary"
     "/api/v2/hello/*path":
-      - target: "localhost:50051"
+      - target: "127.0.0.1:8391"
         protocol: "grpc"
         weight: 100
     "/api/v3/hello":
-      - target: "localhost:50051"
+      - target: "127.0.0.1:8391"
         protocol: "grpc"
         weight: 100
     "/api/v1/order":
-      - target: "http://localhost:8082"
+      - target: "http://127.0.0.1:8382"
         weight: 10
   engine: "trie"
   loadBalancer: "round_robin"
@@ -52,11 +63,15 @@ security:
   ipWhitelist:
     - "127.0.0.1"
     - "localhost"
+    - "10.2.100.111"
   ipUpdateMode: "override" # 可选值：override（覆盖）或 append（追加）
 cache:
-  addr: "10.2.103.35:6379"
-  password: ""
+  addr: "10.2.103.35:8379"
+  password: "redis123"
   db: 0
+consul:
+  enabled: false
+  addr: "10.2.103.35:8300"
 traffic:
   rateLimit:
     enabled: true
@@ -76,6 +91,11 @@ observability:
   prometheus:
     enabled: true
     path: "/metrics"
+  jaeger:
+    enabled: true
+    endpoint: "10.2.103.35:8331" # OTLP HTTP 端点，Jaeger 默认支持
+    sampler: "always"         # 采样策略：always（全采样）或 ratio（按比例采样）
+    sampleRatio: 1.0          # 如果 sampler 为 ratio，此值为采样比例（0.0-1.0）
 plugins:
   - "log"
   - "metrics"

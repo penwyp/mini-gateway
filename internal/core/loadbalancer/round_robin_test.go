@@ -21,15 +21,15 @@ func TestRoundRobin_SelectTarget(t *testing.T) {
 		},
 		{
 			name:    "Single target",
-			targets: []string{"http://localhost:8081"},
+			targets: []string{"http://localhost:8381"},
 			req:     httptest.NewRequest("GET", "/", nil),
-			want:    "http://localhost:8081",
+			want:    "http://localhost:8381",
 		},
 		{
 			name:    "Multiple targets",
-			targets: []string{"http://localhost:8081", "http://localhost:8082", "http://localhost:8083"},
+			targets: []string{"http://localhost:8381", "http://localhost:8382", "http://localhost:8383"},
 			req:     httptest.NewRequest("GET", "/", nil),
-			want:    "http://localhost:8081", // 第一次请求
+			want:    "http://localhost:8381", // 第一次请求
 		},
 	}
 
@@ -45,16 +45,16 @@ func TestRoundRobin_SelectTarget(t *testing.T) {
 }
 
 func TestRoundRobin_RoundRobinBehavior(t *testing.T) {
-	targets := []string{"http://localhost:8081", "http://localhost:8082", "http://localhost:8083"}
+	targets := []string{"http://localhost:8381", "http://localhost:8382", "http://localhost:8383"}
 	rr := NewRoundRobin()
 	req := httptest.NewRequest("GET", "/", nil)
 
 	// 测试轮询顺序
 	expectedOrder := []string{
-		"http://localhost:8081",
-		"http://localhost:8082",
-		"http://localhost:8083",
-		"http://localhost:8081", // 循环回到第一个
+		"http://localhost:8381",
+		"http://localhost:8382",
+		"http://localhost:8383",
+		"http://localhost:8381", // 循环回到第一个
 	}
 
 	for i, want := range expectedOrder {
@@ -66,7 +66,7 @@ func TestRoundRobin_RoundRobinBehavior(t *testing.T) {
 }
 
 func TestRoundRobin_Concurrency(t *testing.T) {
-	targets := []string{"http://localhost:8081", "http://localhost:8082"}
+	targets := []string{"http://localhost:8381", "http://localhost:8382"}
 	rr := NewRoundRobin()
 	req := httptest.NewRequest("GET", "/", nil)
 
@@ -101,7 +101,7 @@ func TestRoundRobin_Concurrency(t *testing.T) {
 
 func TestRoundRobin_NilRequest(t *testing.T) {
 	rr := NewRoundRobin()
-	targets := []string{"http://localhost:8081", "http://localhost:8082"}
+	targets := []string{"http://localhost:8381", "http://localhost:8382"}
 	got := rr.SelectTarget(targets, nil) // nil request
 	if got == "" {
 		t.Errorf("SelectTarget() with nil request returned empty string, expected a target")

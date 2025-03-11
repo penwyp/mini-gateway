@@ -1,8 +1,13 @@
-package middleware
+package security
 
 import (
 	"bytes"
 	"fmt"
+	"github.com/penwyp/mini-gateway/internal/core/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"io"
 	"net/http"
 	"regexp"
@@ -11,6 +16,8 @@ import (
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 )
+
+var owaspTracer = otel.Tracer("anti:owasp") // 定义认证模块的 Tracer
 
 // OWASP 正则规则库
 var injectionPatterns = []*regexp.Regexp{
@@ -32,6 +39,10 @@ var injectionPatterns = []*regexp.Regexp{
 // AntiInjection 中间件实现防注入检查
 func AntiInjection() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		_, span := owaspTracer.Start(c.Request.Context(), "Anti.Check",
+			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
+		defer span.End()
+
 		// 检查 Query 参数
 		for key, values := range c.Request.URL.Query() {
 			for _, value := range values {
@@ -41,6 +52,8 @@ func AntiInjection() gin.HandlerFunc {
 						zap.String("value", value),
 						zap.String("ip", c.ClientIP()),
 					)
+					span.SetStatus(codes.Error, "Injection detected in query")
+					observability.AntiInjectionBlocks.WithLabelValues(c.Request.URL.Path).Inc()
 					c.JSON(http.StatusBadRequest, gin.H{"error": "Potential injection attack detected"})
 					c.Abort()
 					return
@@ -58,6 +71,8 @@ func AntiInjection() gin.HandlerFunc {
 							zap.String("value", value),
 							zap.String("ip", c.ClientIP()),
 						)
+						span.SetStatus(codes.Error, "Injection detected in form")
+						observability.AntiInjectionBlocks.WithLabelValues(c.Request.URL.Path).Inc()
 						c.JSON(http.StatusBadRequest, gin.H{"error": "Potential injection attack detected"})
 						c.Abort()
 						return
@@ -88,6 +103,8 @@ func AntiInjection() gin.HandlerFunc {
 							zap.Any("value", value),
 							zap.String("ip", c.ClientIP()),
 						)
+						span.SetStatus(codes.Error, "Injection detected in JSON body")
+						observability.AntiInjectionBlocks.WithLabelValues(c.Request.URL.Path).Inc()
 						c.JSON(http.StatusBadRequest, gin.H{"error": "Potential injection attack detected"})
 						c.Abort()
 						return
@@ -107,6 +124,9 @@ func AntiInjection() gin.HandlerFunc {
 						zap.String("value", value),
 						zap.String("ip", c.ClientIP()),
 					)
+
+					span.SetStatus(codes.Error, "Injection detected in header")
+					observability.AntiInjectionBlocks.WithLabelValues(c.Request.URL.Path).Inc()
 					c.JSON(http.StatusBadRequest, gin.H{"error": "Potential injection attack detected"})
 					c.Abort()
 					return
@@ -114,6 +134,7 @@ func AntiInjection() gin.HandlerFunc {
 			}
 		}
 
+		span.SetStatus(codes.Ok, "Request processed")
 		c.Next()
 	}
 }

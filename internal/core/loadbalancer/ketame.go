@@ -3,11 +3,18 @@ package loadbalancer
 import (
 	"crypto/md5"
 	"encoding/binary"
+	"github.com/penwyp/mini-gateway/pkg/logger"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 	"net/http"
 	"sort"
 	"strconv"
 	"sync" // 新增 sync 包
 )
+
+var kTracer = otel.Tracer("loadbalancer:ketama") // 定义负载均衡模块的 Tracer
 
 type Ketama struct {
 	nodes    []string
@@ -26,7 +33,13 @@ func NewKetama(replicas int) *Ketama {
 }
 
 func (k *Ketama) SelectTarget(targets []string, req *http.Request) string {
+	// 开始追踪负载均衡选择
+	_, span := kTracer.Start(req.Context(), "LoadBalancer.Select",
+		trace.WithAttributes(attribute.Int("target_count", len(targets))))
+	defer span.End()
+
 	if len(targets) == 0 {
+		span.SetAttributes(attribute.String("result", "no targets"))
 		return ""
 	}
 
@@ -56,12 +69,21 @@ func (k *Ketama) SelectTarget(targets []string, req *http.Request) string {
 	defer k.mu.RUnlock()
 
 	if len(k.hashRing) == 0 {
-		return targets[0]
+		target := targets[0]
+		span.SetAttributes(attribute.String("selected_target", target))
+		logger.Debug("负载均衡选择的目标", zap.String("target", target))
+
+		return target
 	}
 
 	key := k.hashKey(req.RemoteAddr) // 使用客户端 IP 作为哈希键
 	index := k.findNearest(key)
-	return k.hashMap[k.hashRing[index]]
+
+	target := k.hashMap[k.hashRing[index]]
+	span.SetAttributes(attribute.String("selected_target", target))
+	logger.Debug("负载均衡选择的目标", zap.String("target", target))
+
+	return target
 }
 
 func (k *Ketama) buildRing(targets []string) {

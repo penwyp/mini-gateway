@@ -41,12 +41,13 @@ func InitTest() *Logger {
 				MaxBackups: 10,
 				MaxAge:     30, // 30 天
 				Compress:   true,
-			}),                   // 日志输出目标（文件 + 控制台）
+			}), // 日志输出目标（文件 + 控制台）
 			getLogLevel("debug"), // 日志级别
 		)
 
 		// 创建 Zap Logger
-		zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
+		//zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
+		zapLogger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel))
 		loggerInstance = &Logger{zapLogger}
 
 		// 替换全局 Zap logger，便于直接使用 zap.L()
@@ -67,7 +68,8 @@ func Init(cfg Config) *Logger {
 		)
 
 		// 创建 Zap Logger
-		zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
+		//zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
+		zapLogger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel))
 		loggerInstance = &Logger{zapLogger}
 
 		// 替换全局 Zap logger，便于直接使用 zap.L()

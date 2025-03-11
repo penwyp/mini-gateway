@@ -8,8 +8,14 @@ import (
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/internal/core/loadbalancer"
 	"github.com/penwyp/mini-gateway/pkg/logger"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
+
+var trieTracer = otel.Tracer("router:trie") // 定义路由模块的 Tracer
 
 type TrieRouter struct {
 	Trie *Trie
@@ -83,10 +89,16 @@ func (tr *TrieRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	logger.Info("Trie 路由注册完成", zap.Int("rule_count", len(rules)))
 
 	r.Use(func(c *gin.Context) {
+		// 开始追踪路由匹配
+		ctx, span := trieTracer.Start(c.Request.Context(), "Routing.Match",
+			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
+		defer span.End()
+
 		logger.Debug("进入 Trie 路由中间件", zap.String("path", c.Request.URL.Path))
 		path := c.Request.URL.Path
 		targetRules, found := tr.Trie.Search(path)
 		if !found {
+			span.SetStatus(codes.Error, "Route not found")
 			logger.Warn("路由未找到",
 				zap.String("path", path),
 				zap.String("method", c.Request.Method))
@@ -94,7 +106,14 @@ func (tr *TrieRouter) Setup(r gin.IRouter, cfg *config.Config) {
 			c.Abort()
 			return
 		}
+
+		// 记录匹配成功的目标
+		span.SetAttributes(attribute.String("matched_target", targetRules[0].Target))
+		span.SetStatus(codes.Ok, "Route matched")
 		logger.Info("路由匹配成功", zap.String("path", path), zap.Any("rules", targetRules))
+
+		// 将追踪上下文传递给下游
+		c.Request = c.Request.WithContext(ctx)
 		createProxyHandler(targetRules, tr.lb)(c)
 	})
 }
