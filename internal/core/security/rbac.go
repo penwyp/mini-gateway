@@ -13,8 +13,10 @@ import (
 	"go.uber.org/zap"
 )
 
-var enforcer *casbin.Enforcer
-var tokenStore = make(map[string]string)
+var (
+	enforcer   *casbin.Enforcer          // Casbin 权限执行器
+	tokenStore = make(map[string]string) // 存储 RBAC 登录 Token 的映射
+)
 
 // InitRBAC 初始化 Casbin RBAC 规则
 func InitRBAC(cfg *config.Config) {
@@ -22,77 +24,86 @@ func InitRBAC(cfg *config.Config) {
 	e, err := casbin.NewEnforcer(cfg.Security.RBAC.ModelPath, cfg.Security.RBAC.PolicyPath)
 	if err != nil {
 		logger.Error("Failed to initialize Casbin enforcer",
+			zap.String("modelPath", cfg.Security.RBAC.ModelPath),
 			zap.String("policyPath", cfg.Security.RBAC.PolicyPath),
-			zap.Error(err),
-		)
-		panic(err)
+			zap.Error(err))
+		panic(err) // 致命错误，生产环境可考虑优雅处理
 	}
 	enforcer = e
 
-	// 调试加载的策略
+	// 获取已加载的策略用于调试
 	loadedPolicies, err := enforcer.GetPolicy()
 	if err != nil {
-		logger.Warn("Failed to get loaded policies", zap.Error(err))
+		logger.Warn("Failed to retrieve loaded RBAC policies",
+			zap.Error(err))
 	}
-	logger.Info("RBAC initialized with Casbin",
+	logger.Info("RBAC initialized successfully",
 		zap.Bool("enabled", cfg.Security.RBAC.Enabled),
 		zap.String("modelPath", cfg.Security.RBAC.ModelPath),
 		zap.String("policyPath", cfg.Security.RBAC.PolicyPath),
-		zap.Any("loadedPolicies", loadedPolicies),
-	)
+		zap.Any("loadedPolicies", loadedPolicies))
 }
 
-// GenerateRBACLoginToken 生成基于机器 ID 的 RBAC 登录 token
+// GenerateRBACLoginToken 生成基于机器 ID 的 RBAC 登录 Token
 func GenerateRBACLoginToken(username string) (string, error) {
 	// 获取机器唯一 ID
 	machineID, err := machineid.ProtectedID("mini-gateway")
 	if err != nil {
-		logger.Error("Failed to get machine ID", zap.Error(err))
+		logger.Error("Failed to obtain machine ID",
+			zap.Error(err))
 		return "", err
 	}
 
-	// 组合 机器 ID + 用户名 + 时间戳
+	// 组合机器 ID、用户名和时间戳
 	rawToken := fmt.Sprintf("%s-%s-%d", machineID, username, time.Now().UnixNano())
 
-	// 计算 SHA256 哈希
+	// 计算 SHA256 哈希并编码为 Base64
 	hash := sha256.Sum256([]byte(rawToken))
 	token := base64.URLEncoding.EncodeToString(hash[:])
 
 	// 存储 Token
 	tokenStore[token] = username
-	logger.Debug("RBAC login token generated",
+	logger.Debug("RBAC login token generated successfully",
 		zap.String("username", username),
-		zap.String("token", token),
-	)
+		zap.String("token", token))
 
 	return token, nil
 }
 
-// ValidateRBACLoginToken 验证 RBAC 登录 token
+// ValidateRBACLoginToken 验证 RBAC 登录 Token
 func ValidateRBACLoginToken(token string) (string, bool) {
 	username, exists := tokenStore[token]
 	if !exists {
-		logger.Warn("Invalid RBAC login token", zap.String("token", token))
+		logger.Warn("RBAC login token validation failed",
+			zap.String("token", token))
 		return "", false
 	}
+	logger.Debug("RBAC login token validated successfully",
+		zap.String("token", token),
+		zap.String("username", username))
 	return username, true
 }
 
-// CheckPermission 检查权限
+// CheckPermission 检查用户权限
 func CheckPermission(sub, obj, act string) bool {
 	if enforcer == nil {
-		logger.Warn("Casbin enforcer not initialized")
+		logger.Warn("Casbin enforcer not initialized, permission check aborted")
 		return false
 	}
 	ok, err := enforcer.Enforce(sub, obj, act)
 	if err != nil {
-		logger.Error("Failed to enforce RBAC policy",
+		logger.Error("Failed to enforce RBAC permission",
 			zap.String("subject", sub),
 			zap.String("object", obj),
 			zap.String("action", act),
-			zap.Error(err),
-		)
+			zap.Error(err))
 		return false
+	}
+	if !ok {
+		logger.Debug("Permission denied by RBAC policy",
+			zap.String("subject", sub),
+			zap.String("object", obj),
+			zap.String("action", act))
 	}
 	return ok
 }

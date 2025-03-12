@@ -3,16 +3,23 @@ package main
 import (
 	"context"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/reflection"
 	"log"
 	"net"
 	"time"
 
 	"github.com/penwyp/mini-gateway/proto/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
 type helloServiceServer struct {
 	proto.HelloServiceServer
+}
+
+type healthServiceServer struct {
+	proto.HealthServer
 }
 
 func (s *helloServiceServer) GetHello(ctx context.Context, req *proto.HelloRequest) (*proto.HelloResponse, error) {
@@ -48,6 +55,10 @@ func (s *helloServiceServer) ReplyHello(ctx context.Context, req *proto.HelloReq
 	}, nil
 }
 
+func (s *healthServiceServer) Check(context.Context, *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
+	return &grpc_health_v1.HealthCheckResponse{}, nil
+}
+
 func main() {
 	lis, err := net.Listen("tcp", ":8391")
 	if err != nil {
@@ -56,6 +67,14 @@ func main() {
 
 	s := grpc.NewServer()
 	proto.RegisterHelloServiceServer(s, &helloServiceServer{})
+	proto.RegisterHealthServer(s, &healthServiceServer{})
+
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)             // 整个服务器健康
+	healthServer.SetServingStatus("hello.Health", grpc_health_v1.HealthCheckResponse_SERVING) // HelloService 健康
+	grpc_health_v1.RegisterHealthServer(s, healthServer)
+
+	reflection.Register(s)
 
 	log.Println("gRPC server listening on :8391")
 	if err := s.Serve(lis); err != nil {

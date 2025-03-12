@@ -3,11 +3,6 @@ package routing
 import (
 	"context"
 	"fmt"
-	"github.com/penwyp/mini-gateway/internal/core/observability"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"strings"
 	"time"
@@ -15,63 +10,67 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/penwyp/mini-gateway/config"
+	"github.com/penwyp/mini-gateway/internal/core/health"
+	"github.com/penwyp/mini-gateway/internal/core/observability"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"github.com/penwyp/mini-gateway/proto/proto"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-
 	gproto "google.golang.org/protobuf/proto"
 )
 
-var grpcTracer = otel.Tracer("proxy:http")
+// grpcTracer 为 gRPC 代理初始化追踪器
+var grpcTracer = otel.Tracer("proxy:grpc")
 
-// SetupGRPCProxy 设置 HTTP 到 gRPC 的反向代理
+// SetupGRPCProxy 配置 HTTP 到 gRPC 的反向代理
 func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 	mux := runtime.NewServeMux(
 		runtime.WithErrorHandler(httpErrorHandler()),
 		runtime.WithForwardResponseOption(httpResponseModifier),
 	)
 
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),     // 本地测试用，生产环境需配置 TLS
-		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()), // 添加 gRPC 客户端拦截器
+	dialOpts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()), // 本地测试用，生产环境需启用 TLS
+		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor()),
 	}
 
+	// 遍历 gRPC 路由规则
 	for path, rules := range cfg.Routing.GetGrpcRules() {
 		for _, rule := range rules {
 			if rule.Protocol != "grpc" {
 				continue
 			}
-			conn, err := grpc.NewClient(
-				rule.Target,
-				opts...,
-			)
+
+			conn, err := grpc.NewClient(rule.Target, dialOpts...)
 			if err != nil {
-				logger.Error("无法连接到 gRPC 服务",
+				logger.Error("Failed to establish gRPC connection",
 					zap.String("target", rule.Target),
 					zap.Error(err))
 				continue
 			}
 
-			// Register handler once during setup
-			err = proto.RegisterHelloServiceHandler(context.Background(), mux, conn)
-			if err != nil {
-				logger.Error("注册 gRPC 服务失败",
+			// 在设置期间注册 gRPC 服务处理器
+			if err := proto.RegisterHelloServiceHandler(context.Background(), mux, conn); err != nil {
+				logger.Error("Failed to register gRPC service handler",
 					zap.String("target", rule.Target),
 					zap.Error(err))
 				conn.Close()
 				continue
 			}
-			logger.Info("gRPC 服务已注册",
+			logger.Info("Successfully registered gRPC service handler",
 				zap.String("path", path),
 				zap.String("target", rule.Target))
 		}
 
-		// Use a handler that propagates the request context
+		// 处理带有上下文传播的传入请求
 		r.Any(path, func(c *gin.Context) {
 			ctx, span := grpcTracer.Start(c.Request.Context(), "GRPCProxy.Handle",
 				trace.WithAttributes(
@@ -83,71 +82,91 @@ func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 
 			span.SetAttributes(attribute.String("grpc.routing.path", c.Request.URL.Path))
 
-			// Normalize URL to avoid redirects (optional)
 			req := c.Request
+			// 规范化 URL，避免不必要的重定向
 			if strings.HasSuffix(req.URL.Path, "/") {
 				req.URL.Path = strings.TrimSuffix(req.URL.Path, "/")
 			}
 
-			originalPath := c.Request.URL.Path
+			originalPath := req.URL.Path
 			grpcPrefix := cfg.GRPC.Prefix
 			adjustedPath := strings.TrimPrefix(originalPath, grpcPrefix)
 			if adjustedPath == originalPath {
-				logger.Warn("路径未包含 gRPC 前缀，无需调整",
+				logger.Warn("Request path lacks gRPC prefix, no adjustment applied",
 					zap.String("path", originalPath),
 					zap.String("prefix", grpcPrefix))
 			} else {
-				logger.Info("调整 gRPC 路径，移除前缀",
-					zap.String("original_path", originalPath),
-					zap.String("adjusted_path", adjustedPath),
+				logger.Info("Adjusted gRPC request path by removing prefix",
+					zap.String("originalPath", originalPath),
+					zap.String("adjustedPath", adjustedPath),
 					zap.String("prefix", grpcPrefix))
-				c.Request.URL.Path = adjustedPath // 修改请求路径
+				req.URL.Path = adjustedPath
 			}
 
-			// Propagate metadata to the context
-			ctx = c.Request.Context()
-			md := metadata.Pairs("request-id", c.GetHeader("X-Request-ID")) // Example
-			ctx = metadata.NewIncomingContext(ctx, md)
+			// 将元数据传播到请求上下文中
+			ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("request-id", c.GetHeader("X-Request-ID")))
 			req = req.WithContext(ctx)
 
 			start := time.Now()
+			recorder := &statusRecorder{ResponseWriter: c.Writer, Status: http.StatusOK}
+			mux.ServeHTTP(recorder, req)
 
-			// Proxy to gRPC gateway
-			mux.ServeHTTP(c.Writer, req)
+			// 从路由规则中识别目标
+			target := ""
+			for _, rule := range cfg.Routing.GetGrpcRules()[path] {
+				if rule.Protocol == "grpc" {
+					target = rule.Target
+					break
+				}
+			}
+			health.GetGlobalHealthChecker().UpdateRequestCount(target, recorder.Status < 400)
 
-			// 记录请求延迟（可选）
+			// 记录请求延迟
 			duration := time.Since(start).Seconds()
 			observability.RequestDuration.WithLabelValues(c.Request.Method, c.Request.URL.Path).Observe(duration)
-			span.SetStatus(codes.Ok, "gRPC proxy successful")
+			span.SetStatus(codes.Ok, "gRPC proxy completed successfully")
 		})
-		logger.Info("gRPC 代理已设置", zap.String("path", path))
+		logger.Info("gRPC proxy route configured successfully",
+			zap.String("path", path))
 	}
 }
 
-func httpErrorHandler() func(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, r *http.Request, err error) {
+// statusRecorder 捕获 HTTP 响应状态码
+type statusRecorder struct {
+	gin.ResponseWriter
+	Status int
+}
+
+// WriteHeader 重写 WriteHeader 以捕获状态码
+func (r *statusRecorder) WriteHeader(code int) {
+	r.Status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// httpErrorHandler 自定义 gRPC 请求的错误处理
+func httpErrorHandler() runtime.ErrorHandlerFunc {
 	return func(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, r *http.Request, err error) {
 		st, _ := status.FromError(err)
 		statusCode := fmt.Sprintf("%d", st.Code())
 		path := r.URL.Path
 
-		// 记录失败的 gRPC 请求
 		observability.GRPCCallsTotal.WithLabelValues(path, statusCode).Inc()
-		logger.Error("gRPC 请求失败",
+		logger.Error("gRPC request processing failed",
 			zap.String("path", path),
-			zap.String("status", statusCode),
+			zap.String("statusCode", statusCode),
 			zap.String("error", st.Message()))
 
-		// 默认错误处理
 		runtime.DefaultHTTPErrorHandler(ctx, mux, marshaler, w, r, err)
 	}
 }
 
-// httpResponseModifier 修改 HTTP 响应
-func httpResponseModifier(ctx context.Context, w http.ResponseWriter, p gproto.Message) error {
+// httpResponseModifier 为 HTTP 响应添加自定义头部
+func httpResponseModifier(ctx context.Context, w http.ResponseWriter, _ gproto.Message) error {
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		logger.Info("Metadata found", zap.Any("metadata", md))
+		logger.Info("Metadata found in request context",
+			zap.Any("metadata", md))
 	} else {
-		logger.Warn("No metadata in context")
+		logger.Warn("No metadata found in request context")
 	}
 	w.Header().Set("X-Proxy-Type", "grpc-gateway")
 	w.Header().Set("X-Powered-By", "mini-gateway")

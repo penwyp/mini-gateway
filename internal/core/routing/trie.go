@@ -6,7 +6,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
-	"github.com/penwyp/mini-gateway/internal/core/loadbalancer"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -15,38 +14,39 @@ import (
 	"go.uber.org/zap"
 )
 
-var trieTracer = otel.Tracer("router:trie") // 定义路由模块的 Tracer
+// trieTracer 为 Trie 路由模块初始化追踪器
+var trieTracer = otel.Tracer("router:trie")
 
+// TrieRouter 使用 Trie 数据结构管理 HTTP 路由
 type TrieRouter struct {
-	Trie *Trie
-	lb   loadbalancer.LoadBalancer
+	Trie *Trie // Trie 数据结构实例
 }
 
+// Trie 表示用于高效前缀匹配路由的 Trie 数据结构
 type Trie struct {
-	Root *TrieNode
+	Root *TrieNode // Trie 的根节点
 }
 
+// TrieNode 表示 Trie 中的一个节点，包含子节点和路由规则
 type TrieNode struct {
-	Children map[rune]*TrieNode
-	Rules    config.RoutingRules
-	IsEnd    bool
+	Children map[rune]*TrieNode  // 子节点映射
+	Rules    config.RoutingRules // 路由规则
+	IsEnd    bool                // 标记此节点是否为有效路由的终点
 }
 
+// NewTrieRouter 创建并初始化 TrieRouter 实例
 func NewTrieRouter(cfg *config.Config) *TrieRouter {
-	lb, err := loadbalancer.NewLoadBalancer(cfg.Routing.LoadBalancer, cfg)
-	if err != nil {
-		logger.Error("创建负载均衡器失败", zap.Error(err))
-		lb = loadbalancer.NewRoundRobin()
-	}
 	return &TrieRouter{
-		Trie: &Trie{Root: &TrieNode{Children: make(map[rune]*TrieNode)}},
-		lb:   lb,
+		Trie: &Trie{
+			Root: &TrieNode{Children: make(map[rune]*TrieNode)},
+		},
 	}
 }
 
+// Insert 将路径及其关联的路由规则插入 Trie
 func (t *Trie) Insert(path string, rules config.RoutingRules) {
 	node := t.Root
-	path = strings.TrimPrefix(path, "/")
+	path = strings.TrimPrefix(path, "/") // 规范化路径，去除前导斜杠
 	for _, ch := range path {
 		if node.Children[ch] == nil {
 			node.Children[ch] = &TrieNode{Children: make(map[rune]*TrieNode)}
@@ -55,15 +55,16 @@ func (t *Trie) Insert(path string, rules config.RoutingRules) {
 	}
 	node.Rules = rules
 	node.IsEnd = true
-	logger.Info("在 Trie 中插入路由",
+	logger.Info("Successfully inserted route into Trie",
 		zap.String("path", "/"+path),
 		zap.Any("rules", rules))
 }
 
+// Search 在 Trie 中查找给定路径的路由规则
 func (t *Trie) Search(path string) (config.RoutingRules, bool) {
 	node := t.Root
-	path = strings.TrimPrefix(path, "/")
-	path = strings.TrimSuffix(path, "/") // 去掉末尾斜杠
+	path = strings.TrimPrefix(path, "/") // 规范化路径，去除前导斜杠
+	path = strings.TrimSuffix(path, "/") // 去除尾部斜杠以保持一致性
 	for _, ch := range path {
 		if node.Children[ch] == nil {
 			return nil, false
@@ -76,44 +77,53 @@ func (t *Trie) Search(path string) (config.RoutingRules, bool) {
 	return nil, false
 }
 
+// Setup 根据配置在 Gin 路由器中设置 TrieRouter 的 HTTP 路由规则
 func (tr *TrieRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
-		logger.Warn("配置中未找到路由规则")
+		logger.Warn("No HTTP routing rules found in configuration")
 		return
 	}
 
+	// 将所有路由规则插入 Trie
 	for path, targetRules := range rules {
 		tr.Trie.Insert(path, targetRules)
 	}
-	logger.Info("Trie 路由注册完成", zap.Int("rule_count", len(rules)))
+	logger.Info("Trie routing setup completed",
+		zap.Int("ruleCount", len(rules)))
 
+	httpProxy := NewHTTPProxy(cfg)
+
+	// 中间件：处理路由匹配和代理转发
 	r.Use(func(c *gin.Context) {
-		// 开始追踪路由匹配
+		// 开始追踪路由匹配过程
 		ctx, span := trieTracer.Start(c.Request.Context(), "Routing.Match",
 			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
 		defer span.End()
 
-		logger.Debug("进入 Trie 路由中间件", zap.String("path", c.Request.URL.Path))
+		logger.Debug("Processing request in Trie routing middleware",
+			zap.String("path", c.Request.URL.Path))
 		path := c.Request.URL.Path
 		targetRules, found := tr.Trie.Search(path)
 		if !found {
 			span.SetStatus(codes.Error, "Route not found")
-			logger.Warn("路由未找到",
+			logger.Warn("No matching route found",
 				zap.String("path", path),
 				zap.String("method", c.Request.Method))
-			c.JSON(http.StatusNotFound, gin.H{"error": "路由未找到"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "Route not found"})
 			c.Abort()
 			return
 		}
 
-		// 记录匹配成功的目标
+		// 记录和追踪成功匹配的路由
 		span.SetAttributes(attribute.String("matched_target", targetRules[0].Target))
-		span.SetStatus(codes.Ok, "Route matched")
-		logger.Info("路由匹配成功", zap.String("path", path), zap.Any("rules", targetRules))
+		span.SetStatus(codes.Ok, "Route matched successfully")
+		logger.Info("Successfully matched route in Trie",
+			zap.String("path", path),
+			zap.Any("rules", targetRules))
 
-		// 将追踪上下文传递给下游
+		// 将追踪上下文传递下游并处理请求
 		c.Request = c.Request.WithContext(ctx)
-		createProxyHandler(targetRules, tr.lb)(c)
+		httpProxy.createHTTPHandler(targetRules)(c)
 	})
 }

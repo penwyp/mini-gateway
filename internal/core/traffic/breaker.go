@@ -1,11 +1,6 @@
 package traffic
 
 import (
-	"github.com/penwyp/mini-gateway/internal/core/observability"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"sync"
 	"time"
@@ -13,45 +8,51 @@ import (
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
+	"github.com/penwyp/mini-gateway/internal/core/observability"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
+// breakerTimeSlidingTracer 为时间滑动窗口熔断器模块初始化追踪器
 var breakerTimeSlidingTracer = otel.Tracer("breaker:time-sliding")
 
-// RequestStat 记录单次请求的状态
+// RequestStat 捕获单个请求的状态
 type RequestStat struct {
-	Success   bool
-	Latency   time.Duration
-	Timestamp time.Time
+	Success   bool          // 请求是否成功
+	Latency   time.Duration // 请求处理时长
+	Timestamp time.Time     // 请求完成时间
 }
 
-// TimeSlidingWindow 基于时间的滑动窗口
+// TimeSlidingWindow 实现基于时间的滑动窗口，用于请求统计
 type TimeSlidingWindow struct {
-	requests []RequestStat
-	mutex    sync.RWMutex
-	duration time.Duration
+	requests []RequestStat // 最近请求	// 最近请求统计列表
+	mutex    sync.RWMutex  // 互斥锁，确保线程安全
+	duration time.Duration // 窗口持续时间
 }
 
-// NewTimeSlidingWindow 创建时间滑动窗口
+// NewTimeSlidingWindow 创建新的时间滑动窗口
 func NewTimeSlidingWindow(duration time.Duration) *TimeSlidingWindow {
 	sw := &TimeSlidingWindow{
 		requests: make([]RequestStat, 0),
 		duration: duration,
 	}
-	go sw.cleanup() // 启动定时清理
+	go sw.cleanup() // 启动后台清理协程
 	return sw
 }
 
-// Update 更新时间滑动窗口
+// Update 向滑动窗口添加新的请求统计
 func (sw *TimeSlidingWindow) Update(stat RequestStat) {
 	sw.mutex.Lock()
 	defer sw.mutex.Unlock()
 	sw.requests = append(sw.requests, stat)
 }
 
-// cleanup 定时清理过期数据
+// cleanup 定期清理窗口中过期的请求统计
 func (sw *TimeSlidingWindow) cleanup() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -69,7 +70,7 @@ func (sw *TimeSlidingWindow) cleanup() {
 	}
 }
 
-// ErrorRate 计算错误率
+// ErrorRate 计算窗口内的当前错误率
 func (sw *TimeSlidingWindow) ErrorRate() float64 {
 	sw.mutex.RLock()
 	defer sw.mutex.RUnlock()
@@ -86,7 +87,7 @@ func (sw *TimeSlidingWindow) ErrorRate() float64 {
 	return float64(failed) / float64(total)
 }
 
-// AvgLatency 计算平均响应时间
+// AvgLatency 计算窗口内请求的平均延迟
 func (sw *TimeSlidingWindow) AvgLatency() time.Duration {
 	sw.mutex.RLock()
 	defer sw.mutex.RUnlock()
@@ -100,8 +101,9 @@ func (sw *TimeSlidingWindow) AvgLatency() time.Duration {
 	return totalLatency / time.Duration(len(sw.requests))
 }
 
-// Prometheus 指标
+// Prometheus 指标用于熔断器可观测性
 var (
+	// errorRateGauge 跟踪每个路由的错误率
 	errorRateGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gateway_error_rate",
@@ -109,6 +111,8 @@ var (
 		},
 		[]string{"path"},
 	)
+
+	// latencyGauge 跟踪每个路由的平均延迟（单位：秒）
 	latencyGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gateway_avg_latency_seconds",
@@ -118,16 +122,17 @@ var (
 	)
 )
 
+// init 注册 Prometheus 指标
 func init() {
 	prometheus.MustRegister(errorRateGauge, latencyGauge)
 }
 
-// Breaker 中间件实现熔断降级
+// Breaker 返回用于熔断和降级的 Gin 中间件
 func Breaker() gin.HandlerFunc {
 	cfg := config.GetConfig()
 	if !cfg.Middleware.Breaker || !cfg.Traffic.Breaker.Enabled {
 		return func(c *gin.Context) {
-			c.Next() // 熔断器未启用，直接放行
+			c.Next() // 如果熔断器未启用，则跳过
 		}
 	}
 
@@ -142,10 +147,11 @@ func Breaker() gin.HandlerFunc {
 		})
 	}
 
-	// 初始化时间滑动窗口
+	// 初始化时间滑动窗口用于请求统计
 	window := NewTimeSlidingWindow(time.Duration(cfg.Traffic.Breaker.WindowDuration) * time.Second)
 
 	return func(c *gin.Context) {
+		// 开始追踪熔断器检查
 		_, span := breakerTimeSlidingTracer.Start(c.Request.Context(), "Breaker.Check",
 			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
 		defer span.End()
@@ -153,23 +159,24 @@ func Breaker() gin.HandlerFunc {
 		start := time.Now()
 		path := c.Request.URL.Path
 
+		// 在 Hystrix 熔断器中执行请求
 		err := hystrix.Do(path, func() error {
-			c.Next() // 执行下游请求
+			c.Next() // 处理下游请求
 			return c.Err()
 		}, func(err error) error {
-			// 降级逻辑
-			logger.Warn("Service circuit breaker triggered",
+			// 熔断打开时的回退逻辑
+			logger.Warn("Circuit breaker triggered for route",
 				zap.String("path", path),
-				zap.Error(err),
-			)
+				zap.Error(err))
 			span.SetStatus(codes.Error, "Circuit breaker open")
-			span.SetAttributes(attribute.String("breaker_state", "open"))
+			span.SetAttributes(attribute.String("breakerState", "open"))
 			observability.BreakerTrips.WithLabelValues(path).Inc()
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Service unavailable"})
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Service temporarily unavailable"})
 			c.Abort()
-			return nil
+			return nil // 表示回退已处理错误
 		})
 
+		// 在滑动窗口中记录请求统计
 		latency := time.Since(start)
 		success := err == nil && c.Writer.Status() < 400
 		window.Update(RequestStat{
@@ -183,15 +190,14 @@ func Breaker() gin.HandlerFunc {
 		avgLatency := window.AvgLatency()
 		errorRateGauge.WithLabelValues(path).Set(errorRate)
 		latencyGauge.WithLabelValues(path).Set(float64(avgLatency) / float64(time.Second))
-		span.SetStatus(codes.Ok, "Request processed")
+		span.SetStatus(codes.Ok, "Request processed successfully")
 
-		// 日志记录统计信息
-		logger.Debug("Request stats",
+		// 记录请求统计用于调试
+		logger.Debug("Updated request statistics",
 			zap.String("path", path),
 			zap.Bool("success", success),
 			zap.Duration("latency", latency),
 			zap.Float64("errorRate", errorRate),
-			zap.Duration("avgLatency", avgLatency),
-		)
+			zap.Duration("avgLatency", avgLatency))
 	}
 }

@@ -12,40 +12,52 @@ import (
 	"go.uber.org/zap"
 )
 
-var rrTracer = otel.Tracer("loadbalancer:round-robin") // 定义负载均衡模块的 Tracer
+// rrTracer 为 RoundRobin 负载均衡模块初始化追踪器
+var rrTracer = otel.Tracer("loadbalancer:round-robin")
 
+// RoundRobin 实现简单的轮询负载均衡算法
 type RoundRobin struct {
-	next uint32
-	mu   sync.Mutex
+	next uint32     // 跟踪下一个目标索引
+	mu   sync.Mutex // 确保索引更新的线程安全
 }
 
+// NewRoundRobin 创建并初始化 RoundRobin 负载均衡器实例
 func NewRoundRobin() LoadBalancer {
-	return &RoundRobin{}
+	rr := &RoundRobin{}
+	logger.Info("RoundRobin load balancer initialized")
+	return rr
 }
 
+// SelectTarget 以轮询方式选择下一个可用目标
 func (rr *RoundRobin) SelectTarget(targets []string, r *http.Request) string {
-	// 开始追踪负载均衡选择
+	// 开始追踪负载均衡选择过程
 	_, span := rrTracer.Start(r.Context(), "LoadBalancer.Select",
 		trace.WithAttributes(attribute.Int("target_count", len(targets))))
 	defer span.End()
 
 	if len(targets) == 0 {
-		logger.Warn("没有可用的目标")
+		logger.Warn("No targets available for round-robin selection")
 		span.SetAttributes(attribute.String("result", "no targets"))
 		return ""
 	}
 
 	rr.mu.Lock()
 	defer rr.mu.Unlock()
-	target := targets[rr.next%uint32(len(targets))]
+
+	// 选择下一个目标并递增计数器
+	index := rr.next % uint32(len(targets))
+	target := targets[index]
 	rr.next++
 
-	// 记录选择的目标
+	// 在追踪和日志中记录所选目标
 	span.SetAttributes(attribute.String("selected_target", target))
-	logger.Debug("负载均衡选择的目标", zap.String("target", target))
+	logger.Debug("Selected target using round-robin",
+		zap.String("target", target),
+		zap.Uint32("index", index))
 	return target
 }
 
+// UpdateTargets 对于 RoundRobin 是空操作，因其依赖运行时目标列表
 func (rr *RoundRobin) UpdateTargets(cfg *config.Config) {
-	// 此方法无需 tracing，因为它是配置更新，不涉及请求处理
+	// 无需配置更新，目标由每次请求提供
 }

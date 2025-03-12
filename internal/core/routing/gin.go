@@ -3,36 +3,36 @@ package routing
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
-	"github.com/penwyp/mini-gateway/internal/core/loadbalancer"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 )
 
+// GinRouter 管理 Gin 框架的 HTTP 路由设置
 type GinRouter struct {
-	lb loadbalancer.LoadBalancer
 }
 
-func NewGinRouter(cfg *config.Config) *GinRouter {
-	lb, err := loadbalancer.NewLoadBalancer(cfg.Routing.LoadBalancer, cfg)
-	if err != nil {
-		logger.Error("创建负载均衡器失败", zap.Error(err))
-		lb = loadbalancer.NewRoundRobin()
-	}
-	return &GinRouter{lb: lb}
+// NewGinRouter 创建并初始化 GinRouter 实例
+func NewGinRouter() *GinRouter {
+	logger.Info("GinRouter initialized")
+	return &GinRouter{}
 }
 
+// Setup 在提供的 Gin 路由器中配置 HTTP 路由规则
 func (gr *GinRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
-		logger.Warn("配置中未找到路由规则")
+		logger.Warn("No HTTP routing rules found in configuration")
 		return
 	}
 
+	httpProxy := NewHTTPProxy(cfg)
+
+	// 为每个路径注册路由规则
 	for path, targetRules := range rules {
-		logger.Info("在 Gin 中注册路由",
+		logger.Info("Registering HTTP route",
 			zap.String("path", path),
 			zap.Any("targets", targetRules))
 
-		r.Any(path, createProxyHandler(targetRules, gr.lb))
+		r.Any(path, httpProxy.createHTTPHandler(targetRules))
 	}
 }

@@ -5,9 +5,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// 定义全局 Prometheus 指标变量
+// 定义全局 Prometheus 指标用于可观测性
 var (
-	// RequestsTotal 记录网关处理的请求总数，按方法、路径和状态码分类
+	// RequestsTotal 跟踪网关处理的请求总数，按方法、路径和状态码分类
 	RequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_requests_total",
@@ -16,7 +16,7 @@ var (
 		[]string{"method", "path", "status"},
 	)
 
-	// RequestDuration 记录请求延迟分布，按方法和路径分类
+	// RequestDuration 测量请求延迟分布（单位：秒），按方法和路径分类
 	RequestDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "gateway_request_duration_seconds",
@@ -26,7 +26,7 @@ var (
 		[]string{"method", "path"},
 	)
 
-	// RateLimitRejections 记录因限流拒绝的请求数，按路径分类
+	// RateLimitRejections 统计因限流拒绝的请求数，按路径分类
 	RateLimitRejections = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_rate_limit_rejections_total",
@@ -35,16 +35,16 @@ var (
 		[]string{"path"},
 	)
 
-	// BreakerTrips 记录熔断器触发的次数，按路径分类
+	// BreakerTrips 统计熔断器触发的次数，按路径分类
 	BreakerTrips = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_breaker_trips_total",
-			Help: "Total number of breaker trips",
+			Help: "Total number of circuit breaker trips",
 		},
 		[]string{"path"},
 	)
 
-	// ActiveWebSocketConnections 记录当前活跃的 WebSocket 连接数
+	// ActiveWebSocketConnections 跟踪当前活跃的 WebSocket 连接数
 	ActiveWebSocketConnections = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "gateway_websocket_connections_active",
@@ -52,7 +52,7 @@ var (
 		},
 	)
 
-	// JwtAuthFailures 记录 JWT 鉴权失败的次数，按路径分类
+	// JwtAuthFailures 统计 JWT 认证失败的次数，按路径分类
 	JwtAuthFailures = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_jwt_auth_failures_total",
@@ -61,7 +61,7 @@ var (
 		[]string{"path"},
 	)
 
-	// IPAclRejections 记录因 IP 黑白名单拒绝的请求数，按路径和 IP 分类
+	// IPAclRejections 统计因 IP 访问控制列表拒绝的请求数，按路径和 IP 分类
 	IPAclRejections = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_ip_acl_rejections_total",
@@ -70,7 +70,7 @@ var (
 		[]string{"path", "ip"},
 	)
 
-	// AntiInjectionBlocks 记录因防注入检测拦截的请求数，按路径分类
+	// AntiInjectionBlocks 统计因检测到注入行为而阻止的请求数，按路径分类
 	AntiInjectionBlocks = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_anti_injection_blocks_total",
@@ -79,7 +79,7 @@ var (
 		[]string{"path"},
 	)
 
-	// CacheHits 记录缓存命中次数，按路径分类
+	// CacheHits 统计缓存命中的次数，按路径分类
 	CacheHits = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_cache_hits_total",
@@ -88,7 +88,7 @@ var (
 		[]string{"path"},
 	)
 
-	// CacheMisses 记录缓存未命中次数，按路径分类
+	// CacheMisses 统计缓存未命中的次数，按路径分类
 	CacheMisses = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_cache_misses_total",
@@ -97,7 +97,7 @@ var (
 		[]string{"path"},
 	)
 
-	// GRPCCallsTotal 记录 gRPC 请求总数，按路径分类
+	// GRPCCallsTotal 跟踪处理的 gRPC 调用总数，按路径和状态分类
 	GRPCCallsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_grpc_calls_total",
@@ -106,17 +106,23 @@ var (
 		[]string{"path", "status"},
 	)
 
-	// metricsInitialized 用于确保指标只初始化一次
+	// MemoryAllocations 跟踪内存分配的总数
+	MemoryAllocations = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gateway_memory_allocations_total",
+		Help: "Total number of memory allocations",
+	})
+
+	// metricsInitialized 确保指标只初始化一次
 	metricsInitialized bool
 )
 
-// InitMetrics 初始化所有 Prometheus 指标
+// InitMetrics 初始化所有 Prometheus 指标（如果尚未初始化）
 func InitMetrics() {
 	if metricsInitialized {
-		return // 避免重复初始化
+		return // 防止重复初始化
 	}
 
-	// 所有指标已在包级别通过 promauto 自动注册，这里只需标记初始化完成
+	// 通过 promauto 在包级别自动注册指标，标记为已初始化
 	metricsInitialized = true
 }
 
@@ -144,7 +150,7 @@ func RegisterCustomGauge(name, help string) prometheus.Gauge {
 // RegisterCustomHistogram 注册自定义 Histogram 指标
 func RegisterCustomHistogram(name, help string, labels []string, buckets []float64) *prometheus.HistogramVec {
 	if buckets == nil {
-		buckets = prometheus.DefBuckets // 使用默认桶
+		buckets = prometheus.DefBuckets // 未指定时使用默认桶
 	}
 	return promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -156,7 +162,7 @@ func RegisterCustomHistogram(name, help string, labels []string, buckets []float
 	)
 }
 
-// ResetMetrics 重置所有指标（仅用于测试或特殊场景）
+// ResetMetrics 重置所有指标到初始状态（用于测试或特殊场景）
 func ResetMetrics() {
 	RequestsTotal.Reset()
 	RequestDuration.Reset()
@@ -169,4 +175,5 @@ func ResetMetrics() {
 	CacheHits.Reset()
 	CacheMisses.Reset()
 	GRPCCallsTotal.Reset()
+	// 注意：MemoryAllocations 是普通 Counter，无 Reset 方法，不予重置
 }

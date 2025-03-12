@@ -9,40 +9,68 @@ import (
 	"sync"
 	"time"
 
-	"github.com/penwyp/mini-gateway/pkg/logger"
-	"go.uber.org/zap"
-
 	"github.com/fsnotify/fsnotify"
+	"github.com/penwyp/mini-gateway/pkg/logger"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
-// Config 定义网关的配置结构体，新增 Logger 配置
+// Config 定义网关的配置结构体
 type Config struct {
-	Server        Server          `mapstructure:"server"`
-	Routing       Routing         `mapstructure:"routing"`
-	Security      Security        `mapstructure:"security"`
-	Traffic       Traffic         `mapstructure:"traffic"`
-	Observability Observability   `mapstructure:"observability"`
-	Plugins       []string        `mapstructure:"plugins"` // 插件列表
-	Logger        Logger          `mapstructure:"logger"`  // 新增日志配置
-	Cache         Redis           `mapstructure:"cache"`
-	Consul        Consul          `mapstructure:"consul"`
-	Middleware    Middleware      `mapstructure:"middleware"` // 新增中间件配置
-	GRPC          GRPCConfig      `mapstructure:"grpc"`
-	WebSocket     WebSocketConfig `mapstructure:"websocket"` // 新增
+	Server        Server        `mapstructure:"server"`
+	Routing       Routing       `mapstructure:"routing"`
+	Security      Security      `mapstructure:"security"`
+	Traffic       Traffic       `mapstructure:"traffic"`
+	Observability Observability `mapstructure:"observability"`
+	Plugin        Plugin        `mapstructure:"plugin"`
+	Logger        Logger        `mapstructure:"logger"`
+	Cache         Redis         `mapstructure:"cache"`
+	Consul        Consul        `mapstructure:"consul"`
+	Middleware    Middleware    `mapstructure:"middleware"`
+	GRPC          GRPCConfig    `mapstructure:"grpc"`
+	WebSocket     WebSocket     `mapstructure:"websocket"`
+	FileServer    FileServer    `mapstructure:"fileServer"`
+	Performance   Performance   `mapstructure:"performance"`
 }
 
+// Plugin 插件配置
+type Plugin struct {
+	Dir     string   `mapstructure:"dir"`     // 插件目录
+	Plugins []string `mapstructure:"plugins"` // 插件列表
+}
+
+// FileServer 文件服务器配置
+type FileServer struct {
+	StaticFilePath  string `mapstructure:"staticFilePath"`  // 静态文件路径
+	EnabledFastHttp bool   `mapstructure:"enabledFastHttp"` // 是否启用 fasthttp
+}
+
+// Performance 性能相关配置
+type Performance struct {
+	MemoryPool      MemoryPool `mapstructure:"memoryPool"`
+	MaxConnsPerHost int        `mapstructure:"maxConnsPerHost"` // 每个目标的最大连接数
+	HttpPoolEnabled bool       `mapstructure:"httpPoolEnabled"` // 是否启用 HTTP 连接池
+}
+
+// MemoryPool 内存池配置
+type MemoryPool struct {
+	Enabled         bool `mapstructure:"enabled"`
+	TargetsCapacity int  `mapstructure:"targetsCapacity"`
+	RulesCapacity   int  `mapstructure:"rulesCapacity"`
+}
+
+// Consul Consul 服务发现配置
 type Consul struct {
 	Enabled bool   `mapstructure:"enabled"`
 	Addr    string `mapstructure:"addr"`
 }
 
-// WebSocketConfig WebSocket 配置
-type WebSocketConfig struct {
+// WebSocket WebSocket 配置
+type WebSocket struct {
 	Enabled      bool          `mapstructure:"enabled"`
 	MaxIdleConns int           `mapstructure:"maxIdleConns"`
 	IdleTimeout  time.Duration `mapstructure:"idleTimeout"`
-	Prefix       string        `mapstructure:"prefix"` // 新增字段
+	Prefix       string        `mapstructure:"prefix"`
 }
 
 // GetWebSocketRules 获取 WebSocket 路由规则
@@ -62,38 +90,44 @@ func (r Routing) GetWebSocketRules() map[string]RoutingRules {
 	return wsRules
 }
 
+// GRPCConfig gRPC 配置
 type GRPCConfig struct {
 	Enabled         bool     `mapstructure:"enabled"`
-	Prefix          string   `mapstructure:"prefix"` // 新增字段
+	Prefix          string   `mapstructure:"prefix"`
 	HealthCheckPath string   `mapstructure:"healthCheckPath"`
 	Reflection      bool     `mapstructure:"reflection"`
 	AllowedOrigins  []string `mapstructure:"allowedOrigins"`
 }
 
+// Middleware 中间件开关配置
 type Middleware struct {
-	RateLimit     bool `mapstructure:"rateLimit"`     // 限流中间件
-	IPAcl         bool `mapstructure:"ipAcl"`         // IP ACL 中间件
-	AntiInjection bool `mapstructure:"antiInjection"` // 防注入中间件
-	Auth          bool `mapstructure:"auth"`          // 认证中间件
-	Breaker       bool `mapstructure:"breaker"`       // 熔断器开关
-	Tracing       bool `mapstructure:"tracing"`       // OpenTelemetry 中间件
+	RateLimit     bool `mapstructure:"rateLimit"`
+	IPAcl         bool `mapstructure:"ipAcl"`
+	AntiInjection bool `mapstructure:"antiInjection"`
+	Auth          bool `mapstructure:"auth"`
+	Breaker       bool `mapstructure:"breaker"`
+	Tracing       bool `mapstructure:"tracing"`
 }
 
+// Redis Redis 缓存配置
 type Redis struct {
 	Addr     string `mapstructure:"addr"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
 }
 
+// RoutingRule 路由规则定义
 type RoutingRule struct {
-	Target   string `mapstructure:"target"`
-	Weight   int    `mapstructure:"weight"`
-	Env      string `mapstructure:"env"`
-	Protocol string `mapstructure:"protocol"` // 支持 "http", "grpc", "websocket"
+	Target          string `mapstructure:"target"`
+	Weight          int    `mapstructure:"weight"`
+	Env             string `mapstructure:"env"`
+	Protocol        string `mapstructure:"protocol"`
+	HealthCheckPath string `mapstructure:"healthCheckPath"`
 }
 
 type RoutingRules []RoutingRule
 
+// HasGrpcRule 检查是否存在 gRPC 规则
 func (i RoutingRules) HasGrpcRule() bool {
 	for _, rule := range i {
 		if rule.Protocol == "grpc" {
@@ -103,6 +137,7 @@ func (i RoutingRules) HasGrpcRule() bool {
 	return false
 }
 
+// HasWebsocketRule 检查是否存在 WebSocket 规则
 func (i RoutingRules) HasWebsocketRule() bool {
 	for _, rule := range i {
 		if rule.Protocol == "websocket" {
@@ -112,12 +147,15 @@ func (i RoutingRules) HasWebsocketRule() bool {
 	return false
 }
 
+// Routing 路由配置
 type Routing struct {
-	Rules        map[string]RoutingRules `mapstructure:"rules"`
-	Engine       string                  `mapstructure:"engine"`
-	LoadBalancer string                  `mapstructure:"loadBalancer"`
+	Rules             map[string]RoutingRules `mapstructure:"rules"`
+	Engine            string                  `mapstructure:"engine"`
+	LoadBalancer      string                  `mapstructure:"loadBalancer"`
+	HeartbeatInterval int                     `mapstructure:"heartbeatInterval"`
 }
 
+// GetGrpcRules 获取 gRPC 路由规则
 func (i Routing) GetGrpcRules() map[string]RoutingRules {
 	grpcRules := make(map[string]RoutingRules)
 	for path, rules := range i.Rules {
@@ -126,9 +164,9 @@ func (i Routing) GetGrpcRules() map[string]RoutingRules {
 		}
 	}
 	return grpcRules
-
 }
 
+// GetHTTPRules 获取 HTTP 路由规则
 func (i Routing) GetHTTPRules() map[string]RoutingRules {
 	httpRules := make(map[string]RoutingRules)
 	for path, rules := range i.Rules {
@@ -139,81 +177,92 @@ func (i Routing) GetHTTPRules() map[string]RoutingRules {
 	return httpRules
 }
 
+// Server 服务器配置
 type Server struct {
-	Port string `mapstructure:"port"` // 服务监听端口
+	Port    string `mapstructure:"port"`
+	GinMode string `mapstructure:"ginMode"`
 }
 
+// JWT JWT 认证配置
 type JWT struct {
-	Secret    string `mapstructure:"secret"`    // JWT 密钥
-	ExpiresIn int    `mapstructure:"expiresIn"` // JWT 过期时间（秒）
-	Enabled   bool   `mapstructure:"enabled"`   // 是否启用 JWT
+	Secret    string `mapstructure:"secret"`
+	ExpiresIn int    `mapstructure:"expiresIn"`
+	Enabled   bool   `mapstructure:"enabled"`
 }
 
+// Security 安全相关配置
 type Security struct {
-	AuthMode     string   `mapstructure:"authMode"` // 认证模式（如：JWT、OAuth2 等）
+	AuthMode     string   `mapstructure:"authMode"`
 	JWT          JWT      `mapstructure:"jwt"`
 	RBAC         RBAC     `mapstructure:"rbac"`
-	IPBlacklist  []string `mapstructure:"ipBlacklist"`  // IP 黑名单
-	IPWhitelist  []string `mapstructure:"ipWhitelist"`  // IP 白名单
-	IPUpdateMode string   `mapstructure:"ipUpdateMode"` // 新增：覆盖（override）或追加（append）
+	IPBlacklist  []string `mapstructure:"ipBlacklist"`
+	IPWhitelist  []string `mapstructure:"ipWhitelist"`
+	IPUpdateMode string   `mapstructure:"ipUpdateMode"`
 }
 
+// RBAC RBAC 权限配置
 type RBAC struct {
 	Enabled    bool   `mapstructure:"enabled"`
-	ModelPath  string `mapstructure:"modelPath"`  // RBAC 模型文件路径
-	PolicyPath string `mapstructure:"policyPath"` // RBAC 策略文件路径
+	ModelPath  string `mapstructure:"modelPath"`
+	PolicyPath string `mapstructure:"policyPath"`
 }
 
+// TrafficRateLimit 流量限流配置
 type TrafficRateLimit struct {
-	Enabled   bool   `mapstructure:"enabled"`   // 是否启用限流
-	QPS       int    `mapstructure:"qps"`       // 每秒请求数限制
-	Burst     int    `mapstructure:"burst"`     // 令牌桶突发容量
-	Algorithm string `mapstructure:"algorithm"` // 限流算法: "token_bucket" 或 "leaky_bucket"
+	Enabled   bool   `mapstructure:"enabled"`
+	QPS       int    `mapstructure:"qps"`
+	Burst     int    `mapstructure:"burst"`
+	Algorithm string `mapstructure:"algorithm"`
 }
 
+// TrafficBreaker 熔断器配置
 type TrafficBreaker struct {
 	Enabled        bool    `mapstructure:"enabled"`
 	ErrorRate      float64 `mapstructure:"errorRate"`
-	Timeout        int     `mapstructure:"timeout"`        // 毫秒
-	MinRequests    int     `mapstructure:"minRequests"`    // 最小请求数
-	SleepWindow    int     `mapstructure:"sleepWindow"`    // 毫秒
-	MaxConcurrent  int     `mapstructure:"maxConcurrent"`  // 最大并发数
-	WindowSize     int     `mapstructure:"windowSize"`     // 滑动窗口请求数
-	WindowDuration int     `mapstructure:"windowDuration"` // 滑动窗口时间（秒）
+	Timeout        int     `mapstructure:"timeout"`
+	MinRequests    int     `mapstructure:"minRequests"`
+	SleepWindow    int     `mapstructure:"sleepWindow"`
+	MaxConcurrent  int     `mapstructure:"maxConcurrent"`
+	WindowSize     int     `mapstructure:"windowSize"`
+	WindowDuration int     `mapstructure:"windowDuration"`
 }
 
+// Traffic 流量控制配置
 type Traffic struct {
 	RateLimit TrafficRateLimit `mapstructure:"rateLimit"`
 	Breaker   TrafficBreaker   `mapstructure:"breaker"`
 }
 
+// Observability 可观测性配置
 type Observability struct {
 	Prometheus Prometheus   `mapstructure:"prometheus"`
 	Jaeger     JaegerConfig `mapstructure:"jaeger"`
 }
 
+// Prometheus Prometheus 配置
 type Prometheus struct {
-	Enabled bool   `mapstructure:"enabled"` // 是否启用 Prometheus
-	Path    string `mapstructure:"path"`    // 指标暴露路径
+	Enabled bool   `mapstructure:"enabled"`
+	Path    string `mapstructure:"path"`
 }
 
+// JaegerConfig Jaeger 追踪配置
 type JaegerConfig struct {
 	Enabled     bool    `mapstructure:"enabled"`
 	Endpoint    string  `mapstructure:"endpoint"`
-	Sampler     string  `mapstructure:"sampler"`     // "always" 或 "ratio"
-	SampleRatio float64 `mapstructure:"sampleRatio"` // 采样比例
+	Sampler     string  `mapstructure:"sampler"`
+	SampleRatio float64 `mapstructure:"sampleRatio"`
 }
 
+// Logger 日志配置
 type Logger struct {
-	Level      string `mapstructure:"level"`      // 日志级别 (debug, info, warn, error)
-	FilePath   string `mapstructure:"filePath"`   // 日志文件路径
-	MaxSize    int    `mapstructure:"maxSize"`    // 单个日志文件最大大小 (MB)
-	MaxBackups int    `mapstructure:"maxBackups"` // 保留的旧日志文件数
-	MaxAge     int    `mapstructure:"maxAge"`     // 日志文件保留天数
-	Compress   bool   `mapstructure:"compress"`   // 是否压缩旧日志文件
+	Level      string `mapstructure:"level"`
+	FilePath   string `mapstructure:"filePath"`
+	MaxSize    int    `mapstructure:"maxSize"`
+	MaxBackups int    `mapstructure:"maxBackups"`
+	MaxAge     int    `mapstructure:"maxAge"`
+	Compress   bool   `mapstructure:"compress"`
 }
 
-// configInstance 用于存储全局配置实例
 var (
 	configInstance *Config
 	configMutex    sync.RWMutex
@@ -222,42 +271,36 @@ var (
 // LoadConfig 加载配置文件并返回 Config 实例
 func LoadConfig(configPath string) *Config {
 	v := viper.New()
-
-	// 设置配置文件路径和名称
 	v.SetConfigFile(configPath)
 	v.SetConfigType("yaml")
 
-	// 设置默认值
 	setDefaultValues(v)
 
-	// 读取配置文件
 	if err := v.ReadInConfig(); err != nil {
-		log.Fatalf("Failed to read config file: %v", err)
+		log.Fatalf("Failed to read configuration file: %v", err)
 	}
 
-	// 解析配置到结构体
 	config := &Config{}
 	if err := v.Unmarshal(config); err != nil {
-		log.Fatalf("Failed to unmarshal config: %v", err)
+		log.Fatalf("Failed to unmarshal configuration: %v", err)
 	}
 
-	// 存储全局配置实例
 	configMutex.Lock()
 	configInstance = config
 	configMutex.Unlock()
 
-	// 监听配置文件变化，实现热更新
+	// 监听配置文件变化以实现热更新
 	v.WatchConfig()
 	v.OnConfigChange(func(e fsnotify.Event) {
-		log.Printf("Config file changed: %s", e.Name)
+		logger.Info("Configuration file changed", zap.String("file", e.Name))
 		if err := v.Unmarshal(config); err != nil {
-			log.Printf("Failed to reload config: %v", err)
+			logger.Error("Failed to reload configuration", zap.Error(err))
 			return
 		}
 		configMutex.Lock()
 		configInstance = config
 		configMutex.Unlock()
-		log.Println("Config reloaded successfully")
+		logger.Info("Configuration reloaded successfully")
 	})
 
 	return config
@@ -270,45 +313,43 @@ func GetConfig() *Config {
 	return configInstance
 }
 
-// setDefaultValues 设置默认配置值，包括新增的 Logger 配置
+// setDefaultValues 设置默认配置值
 func setDefaultValues(v *viper.Viper) {
-	// Server
 	v.SetDefault("server.port", "8080")
+	v.SetDefault("server.ginMode", "release")
 
-	// Routing
-	v.SetDefault("routing.engine", "gin")               // 默认使用 Gin 路由
-	v.SetDefault("routing.loadBalancer", "round-robin") // 默认轮询
+	v.SetDefault("plugin.dir", "bin/plugins")
+	v.SetDefault("plugin.plugins", []string{"log"})
 
-	// 中间件默认启用
+	v.SetDefault("routing.engine", "gin")
+	v.SetDefault("routing.loadBalancer", "round-robin")
+	v.SetDefault("routing.heartbeatInterval", 30)
+
 	v.SetDefault("middleware.rateLimit", true)
 	v.SetDefault("middleware.ipAcl", true)
 	v.SetDefault("middleware.antiInjection", true)
 	v.SetDefault("middleware.auth", true)
 	v.SetDefault("middleware.breaker", true)
 
-	// Cache
 	v.SetDefault("redis.addr", "localhost:6379")
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.db", 0)
 
-	// Consul
 	v.SetDefault("consul.enabled", false)
 	v.SetDefault("consul.addr", "localhost:8500")
 
-	// Security
 	v.SetDefault("security.jwt.secret", "default-secret-key")
-	v.SetDefault("security.jwt.expiresIn", 3600) // 默认 1 小时
-	v.SetDefault("security.authMode", "none")    // 默认无认证
+	v.SetDefault("security.jwt.expiresIn", 3600)
+	v.SetDefault("security.authMode", "none")
 	v.SetDefault("security.rbac.enabled", false)
 	v.SetDefault("security.rbac.modelPath", "config/data/rbac_model.conf")
 	v.SetDefault("security.rbac.policyPath", "config/data/rbac_policy.csv")
-	v.SetDefault("security.ipUpdateMode", "override") // 默认覆盖更新
+	v.SetDefault("security.ipUpdateMode", "override")
 
-	// Traffic
 	v.SetDefault("traffic.rateLimit.enabled", true)
 	v.SetDefault("traffic.rateLimit.qps", 1000)
 	v.SetDefault("traffic.rateLimit.burst", 2000)
-	v.SetDefault("traffic.rateLimit.algorithm", "token_bucket") // 默认使用令牌桶
+	v.SetDefault("traffic.rateLimit.algorithm", "token_bucket")
 	v.SetDefault("traffic.breaker.enabled", true)
 	v.SetDefault("traffic.breaker.errorRate", 0.5)
 	v.SetDefault("traffic.breaker.timeout", 1000)
@@ -318,7 +359,6 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("traffic.breaker.windowSize", 100)
 	v.SetDefault("traffic.breaker.windowDuration", 10)
 
-	// Observability
 	v.SetDefault("observability.prometheus.enabled", true)
 	v.SetDefault("observability.prometheus.path", "/metrics")
 	v.SetDefault("observability.jaeger.enabled", false)
@@ -326,26 +366,32 @@ func setDefaultValues(v *viper.Viper) {
 	v.SetDefault("observability.jaeger.sampler", "always")
 	v.SetDefault("observability.jaeger.sampleRatio", 1.0)
 
-	// Logger（新增）
 	v.SetDefault("logger.level", "info")
 	v.SetDefault("logger.filePath", "logs/gateway.log")
-	v.SetDefault("logger.maxSize", 100)   // 100 MB
-	v.SetDefault("logger.maxBackups", 10) // 保留 10 个备份
-	v.SetDefault("logger.maxAge", 30)     // 保留 30 天
-	v.SetDefault("logger.compress", true) // 压缩旧日志
+	v.SetDefault("logger.maxSize", 100)
+	v.SetDefault("logger.maxBackups", 10)
+	v.SetDefault("logger.maxAge", 30)
+	v.SetDefault("logger.compress", true)
 
-	// GRPC
 	v.SetDefault("grpc.enabled", true)
 	v.SetDefault("grpc.healthCheckPath", "/grpc/health")
 	v.SetDefault("grpc.reflection", false)
 	v.SetDefault("grpc.allowedOrigins", []string{"*"})
-	v.SetDefault("grpc.prefix", "/grpc") // 设置默认值
+	v.SetDefault("grpc.prefix", "/grpc")
 
-	// WebSocket
 	v.SetDefault("websocket.enabled", true)
 	v.SetDefault("websocket.maxIdleConns", 100)
 	v.SetDefault("websocket.idleTimeout", 60*time.Second)
-	v.SetDefault("websocket.prefix", "/websocket") // 设置默认值
+	v.SetDefault("websocket.prefix", "/websocket")
+
+	v.SetDefault("performance.memoryPool.enabled", false)
+	v.SetDefault("performance.memoryPool.targetsCapacity", 100)
+	v.SetDefault("performance.memoryPool.rulesCapacity", 100)
+	v.SetDefault("performance.maxConnsPerHost", 512)
+	v.SetDefault("performance.httpPoolEnabled", true)
+
+	v.SetDefault("fileServer.staticFilePath", "./data")
+	v.SetDefault("fileServer.enabledFastHttp", true)
 }
 
 // InitConfig 初始化配置（供 main 函数调用）
@@ -353,22 +399,20 @@ func InitConfig() *Config {
 	cfg := &Config{}
 	viper.SetConfigFile("config/config.yaml")
 	if err := viper.ReadInConfig(); err != nil {
-		logger.Error("读取配置文件失败", zap.Error(err))
+		logger.Error("Failed to read configuration file", zap.Error(err))
 		os.Exit(1)
 	}
 	if err := viper.Unmarshal(cfg); err != nil {
-		logger.Error("解析配置文件失败", zap.Error(err))
+		logger.Error("Failed to unmarshal configuration", zap.Error(err))
 		os.Exit(1)
 	}
 
-	// gRPC 配置检查
 	if err := validateGRPCConfig(cfg); err != nil {
-		logger.Error("gRPC 配置检查失败", zap.Error(err))
+		logger.Error("gRPC configuration validation failed", zap.Error(err))
 		os.Exit(1)
 	}
-	// WebSocket 配置检查
 	if err := validateWebSocketConfig(cfg); err != nil {
-		logger.Error("WebSocket 配置检查失败", zap.Error(err))
+		logger.Error("WebSocket configuration validation failed", zap.Error(err))
 		os.Exit(1)
 	}
 
@@ -376,38 +420,35 @@ func InitConfig() *Config {
 	return cfg
 }
 
+// validateWebSocketConfig 验证 WebSocket 配置
 func validateWebSocketConfig(cfg *Config) error {
 	if cfg.WebSocket.Enabled {
-		// 检查前缀
 		if cfg.WebSocket.Prefix == "" || len(cfg.WebSocket.Prefix) < 5 {
-			return fmt.Errorf("WebSocket 前缀为空或过短: %s", cfg.WebSocket.Prefix)
+			return fmt.Errorf("WebSocket prefix is empty or too short: %s", cfg.WebSocket.Prefix)
 		}
 		if strings.ContainsAny(cfg.WebSocket.Prefix, "..*?") {
-			return fmt.Errorf("WebSocket 前缀包含非法字符: %s", cfg.WebSocket.Prefix)
+			return fmt.Errorf("WebSocket prefix contains invalid characters: %s", cfg.WebSocket.Prefix)
 		}
 
-		// 检查路由规则
 		wsRules := cfg.Routing.GetWebSocketRules()
 		if len(wsRules) == 0 {
-			return fmt.Errorf("WebSocket 已启用但未配置任何 WebSocket 路由规则")
+			return fmt.Errorf("WebSocket is enabled but no WebSocket routing rules are configured")
 		}
 
-		// 检查连接池参数
 		if cfg.WebSocket.MaxIdleConns < 0 {
-			return fmt.Errorf("WebSocket maxIdleConns 不能为负数: %d", cfg.WebSocket.MaxIdleConns)
+			return fmt.Errorf("WebSocket maxIdleConns cannot be negative: %d", cfg.WebSocket.MaxIdleConns)
 		}
 		if cfg.WebSocket.IdleTimeout <= 0 {
-			return fmt.Errorf("WebSocket idleTimeout 必须为正值: %s", cfg.WebSocket.IdleTimeout)
+			return fmt.Errorf("WebSocket idleTimeout must be positive: %s", cfg.WebSocket.IdleTimeout)
 		}
 
-		// 检查目标 URL
 		for path, rules := range wsRules {
 			for _, rule := range rules {
 				if !strings.HasPrefix(rule.Target, "ws://") && !strings.HasPrefix(rule.Target, "wss://") {
-					return fmt.Errorf("WebSocket 路由 %s 的目标 %s 必须以 ws:// 或 wss:// 开头", path, rule.Target)
+					return fmt.Errorf("WebSocket route %s target %s must start with ws:// or wss://", path, rule.Target)
 				}
 				if _, err := url.Parse(rule.Target); err != nil {
-					return fmt.Errorf("WebSocket 路由 %s 的目标 %s 格式无效: %v", path, rule.Target, err)
+					return fmt.Errorf("WebSocket route %s target %s has invalid format: %v", path, rule.Target, err)
 				}
 			}
 		}
@@ -415,28 +456,26 @@ func validateWebSocketConfig(cfg *Config) error {
 	return nil
 }
 
+// validateGRPCConfig 验证 gRPC 配置
 func validateGRPCConfig(cfg *Config) error {
-	// 检查前缀
 	if cfg.GRPC.Enabled {
 		if cfg.GRPC.Prefix == "" || len(cfg.GRPC.Prefix) < 5 {
-			return fmt.Errorf("gRPC 前缀为空或过短: %s", cfg.GRPC.Prefix)
+			return fmt.Errorf("gRPC prefix is empty or too short: %s", cfg.GRPC.Prefix)
 		}
 		if strings.ContainsAny(cfg.GRPC.Prefix, "..*?") {
-			return fmt.Errorf("gRPC 前缀包含非法字符: %s", cfg.GRPC.Prefix)
+			return fmt.Errorf("gRPC prefix contains invalid characters: %s", cfg.GRPC.Prefix)
 		}
 
-		// 检查路由规则
 		grpcRules := cfg.Routing.GetGrpcRules()
 		if len(grpcRules) == 0 {
-			return fmt.Errorf("gRPC 已启用但未配置任何 gRPC 路由规则")
+			return fmt.Errorf("gRPC is enabled but no gRPC routing rules are configured")
 		}
 
-		// 检查允许来源
 		for _, origin := range cfg.GRPC.AllowedOrigins {
 			if origin == "*" {
-				logger.Warn("gRPC 允许所有来源，可能存在安全风险")
+				logger.Warn("gRPC allows all origins, which may pose a security risk")
 			} else if _, err := url.Parse(origin); err != nil {
-				return fmt.Errorf("gRPC allowedOrigins 包含无效 URL: %s", origin)
+				return fmt.Errorf("gRPC allowedOrigins contains invalid URL: %s", origin)
 			}
 		}
 	}

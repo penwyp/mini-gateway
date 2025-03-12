@@ -10,44 +10,42 @@ import (
 	"go.uber.org/zap"
 )
 
-// Router 定义路由引擎接口
+// Router 定义路由引擎的接口
 type Router interface {
 	Setup(r gin.IRouter, cfg *config.Config)
 }
 
-// isRegexPattern 检查路径是否为正则表达式
+// isRegexPattern 检查路径是否包含正则表达式字符
 func isRegexPattern(path string) bool {
 	return strings.ContainsAny(path, ".*+?()|[]^$\\")
 }
 
-// validateRules 检查路由规则与引擎的兼容性
+// validateRules 验证路由规则与配置的引擎兼容性
 func validateRules(cfg *config.Config) {
 	engine := cfg.Routing.Engine
 	rules := cfg.Routing.Rules
 
 	for path, pathEndpoints := range rules {
-		var shouldContinue bool
 		for _, endpoint := range pathEndpoints {
+			// 跳过 gRPC 的进一步验证，因其有单独处理
 			if endpoint.Protocol == "grpc" {
-				shouldContinue = true
-				break
+				continue
 			}
+			// Trie 引擎不支持正则表达式路径
 			if engine == "trie" && isRegexPattern(path) {
-				logger.Error("Trie 路由引擎不支持正则表达式路径",
+				logger.Error("Trie routing engine does not support regular expression paths",
 					zap.String("path", path),
-					zap.String("hint", "请使用 'trie-regexp' 或 'regexp' 引擎支持正则路由"))
+					zap.String("hint", "Use 'trie-regexp' or 'regexp' engine for regex support"))
 				os.Exit(1)
 			}
-		}
-		if shouldContinue {
-			continue
-		}
-		if isRegexPattern(path) && engine != "trie-regexp" && engine != "regexp" {
-			logger.Error("路由引擎与正则表达式路径不兼容",
-				zap.String("engine", engine),
-				zap.String("path", path),
-				zap.String("hint", "请使用 'trie-regexp' 或 'regexp' 引擎支持正则路由"))
-			os.Exit(1)
+			// 除 trie-regexp 和 regexp 外的非正则引擎无法处理正则路径
+			if isRegexPattern(path) && engine != "trie-regexp" && engine != "regexp" {
+				logger.Error("Routing engine incompatible with regular expression path",
+					zap.String("engine", engine),
+					zap.String("path", path),
+					zap.String("hint", "Use 'trie-regexp' or 'regexp' engine for regex support"))
+				os.Exit(1)
+			}
 		}
 	}
 }
@@ -55,62 +53,66 @@ func validateRules(cfg *config.Config) {
 // wsProxy 全局变量，用于管理 WebSocket 代理
 var wsProxy *WebSocketProxy
 
-// Setup 初始化路由引擎并设置路由规则，包括 gRPC 和 WebSocket 代理
+// Setup 初始化路由引擎并配置路由规则，包括 gRPC 和 WebSocket 代理
 func Setup(protected gin.IRouter, cfg *config.Config) {
-	logger.Info("加载路由规则", zap.Any("rules", cfg.Routing.Rules))
+	logger.Info("Loading routing rules from configuration",
+		zap.Any("rules", cfg.Routing.Rules))
 	validateRules(cfg)
 
+	// 根据配置选择并初始化适当的路由引擎
 	var router Router
 	switch cfg.Routing.Engine {
 	case "trie":
 		router = NewTrieRouter(cfg)
-		logger.Info("使用 Trie 路由引擎")
-	case "trie-regexp", "trie_regexp":
+		logger.Info("Initialized Trie routing engine")
+	case "trie-regexp", "trie_regexp": // 支持连字符和下划线两种变体
 		router = NewTrieRegexpRouter(cfg)
-		logger.Info("使用 Trie-Regexp 路由引擎")
+		logger.Info("Initialized Trie-Regexp routing engine")
 	case "regexp":
 		router = NewRegexpRouter(cfg)
-		logger.Info("使用 Regexp 路由引擎")
+		logger.Info("Initialized Regexp routing engine")
 	case "gin":
-		router = NewGinRouter(cfg)
-		logger.Info("使用 Gin 路由引擎")
+		router = NewGinRouter()
+		logger.Info("Initialized Gin routing engine")
 	default:
-		logger.Warn("未知的路由引擎，回退到 Gin",
+		logger.Warn("Unknown routing engine specified, defaulting to Gin",
 			zap.String("engine", cfg.Routing.Engine))
-		router = NewGinRouter(cfg)
+		router = NewGinRouter()
 	}
 
-	grpcGroup := protected.Group(cfg.GRPC.Prefix)    // 修改：使用配置中的前缀
-	wsGroup := protected.Group(cfg.WebSocket.Prefix) // 修改：使用配置中的前缀
+	// 为 gRPC 和 WebSocket 路由创建分组，使用配置中的前缀
+	grpcGroup := protected.Group(cfg.GRPC.Prefix)
+	wsGroup := protected.Group(cfg.WebSocket.Prefix)
 
-	// 设置 HTTP 路由
+	// 配置 HTTP 路由
 	router.Setup(protected, cfg)
 
-	// 设置 gRPC 路由
+	// 如果启用且存在规则，配置 gRPC 代理
 	if cfg.GRPC.Enabled && len(cfg.Routing.GetGrpcRules()) > 0 {
-		SetupGRPCProxy(cfg, grpcGroup) // HTTP 到 gRPC
+		SetupGRPCProxy(cfg, grpcGroup)
 	}
 
-	// 设置 WebSocket 路由
+	// 如果启用且存在规则，配置 WebSocket 代理
 	if cfg.WebSocket.Enabled && len(cfg.Routing.GetWebSocketRules()) > 0 {
 		wsProxy = NewWebSocketProxy(cfg)
 		wsProxy.SetupWebSocketProxy(wsGroup, cfg)
-		logger.Info("WebSocket 代理已设置")
+		logger.Info("WebSocket proxy configured successfully")
 	}
 
+	// 为特定引擎中的动态路由注册空处理器
 	switch cfg.Routing.Engine {
 	case "trie", "trie_regexp", "regexp":
-		// 为所有动态路由注册一个空处理器，交给具体 Router 处理
 		for p := range cfg.Routing.GetHTTPRules() {
-			protected.Any(p, func(c *gin.Context) {}) // 空处理器，依赖 TrieRouter 中间件
+			// 空处理器依赖特定 Router 实现中的中间件
+			protected.Any(p, func(c *gin.Context) {})
 		}
 	}
 }
 
-// Cleanup 清理 WebSocket 资源
+// Cleanup 释放 WebSocket 代理相关资源
 func Cleanup() {
 	if wsProxy != nil {
 		wsProxy.Close()
-		logger.Info("WebSocket 代理资源已清理")
+		logger.Info("WebSocket proxy resources released successfully")
 	}
 }

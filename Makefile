@@ -34,9 +34,20 @@ deps:
 
 # 编译项目并将二进制放入 bin 目录
 .PHONY: build
-build: deps
+build: deps build-plugins
 	@mkdir -p $(BIN_DIR)
 	$(GO) build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME) $(CMD_DIR)/main.go
+
+.PHONY: build-plugins
+build-plugins:
+	@echo "Building plugins..."
+	@for dir in $(wildcard plugins/*); do \
+		if [ -f "$$dir/main.go" ]; then \
+			echo "Building $$dir..."; \
+			(cd $$dir && go build -buildmode=plugin -o ../../$(BIN_DIR)/plugins/$$(basename $$dir).so .) || exit 1; \
+		fi \
+	done
+	@echo "Plugins built successfully"
 
 # 运行项目
 .PHONY: run
@@ -136,12 +147,28 @@ setup-consul:
 	echo "Load balancer rules:"; \
 	curl http://localhost:8500/v1/kv/gateway/loadbalancer/rules?raw
 
+.PHONY: prepare-proto
+prepare-proto:
+	mkdir -p proto/lib
+	@if [ -d "proto/lib/googleapis" ]; then \
+		echo "proto/lib/googleapis already exists, updating instead"; \
+		cd proto/lib/googleapis && git pull; \
+	else \
+		git clone --depth 1 https://github.com/googleapis/googleapis.git proto/lib/googleapis; \
+	fi
+	@if [ -d "proto/lib/grpc-proto" ]; then \
+		echo "proto/lib/grpc-proto already exists, updating instead"; \
+		cd proto/lib/grpc-proto && git pull; \
+	else \
+		git clone --depth 1 https://github.com/grpc/grpc-proto.git proto/lib/grpc-proto; \
+	fi
 
 # 生成 protobuf 文件
 .PHONY: proto
-proto:
+proto: prepare-proto
 	protoc -I . \
-		-I /Users/penwyp/Dat/googleapis \
+		-I proto/lib/googleapis \
+		-I proto/lib/grpc-proto \
 		--go_out=./proto \
 		--go_opt=paths=source_relative \
 		--go-grpc_out=./proto \

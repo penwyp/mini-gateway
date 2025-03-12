@@ -3,6 +3,7 @@ package logger
 import (
 	"os"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -46,7 +47,6 @@ func InitTest() *Logger {
 		)
 
 		// 创建 Zap Logger
-		//zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
 		zapLogger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel))
 		loggerInstance = &Logger{zapLogger}
 
@@ -68,7 +68,6 @@ func Init(cfg Config) *Logger {
 		)
 
 		// 创建 Zap Logger
-		//zapLogger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zap.ErrorLevel))
 		zapLogger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel))
 		loggerInstance = &Logger{zapLogger}
 
@@ -107,9 +106,17 @@ func Sync() error {
 // getEncoder 配置日志编码器（JSON 格式）
 func getEncoder() zapcore.Encoder {
 	encoderConfig := zap.NewProductionEncoderConfig()
-	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder // 时间格式: 2025-03-06T12:00:00Z
-	encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
-	return zapcore.NewJSONEncoder(encoderConfig)
+	// 修改时间格式为带时区的 RFC3339 格式
+	encoderConfig.EncodeTime = zapcore.TimeEncoder(func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+		enc.AppendString(t.Format("2006-01-02T15:04:05-07:00"))
+	})
+	// 调整字段名称
+	encoderConfig.TimeKey = "time"                            // 时间字段改为 "time"
+	encoderConfig.LevelKey = "level"                          // 级别字段改为 "level"
+	encoderConfig.MessageKey = "msg"                          // 消息字段改为 "msg"
+	encoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder // 级别使用小写 (info, error 等)
+	encoderConfig.EncodeCaller = zapcore.ShortCallerEncoder   // 可选：简化调用者信息
+	return zapcore.NewConsoleEncoder(encoderConfig)
 }
 
 // getWriteSyncer 配置日志输出（文件 + 控制台）

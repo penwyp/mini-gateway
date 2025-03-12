@@ -2,12 +2,6 @@ package routing
 
 import (
 	"context"
-	"github.com/penwyp/mini-gateway/internal/core/observability"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"net/url"
 	"path"
@@ -16,25 +10,35 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/penwyp/mini-gateway/config"
+	"github.com/penwyp/mini-gateway/internal/core/health"
 	"github.com/penwyp/mini-gateway/internal/core/loadbalancer"
+	"github.com/penwyp/mini-gateway/internal/core/observability"
 	"github.com/penwyp/mini-gateway/pkg/logger"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
+// websocketTracer 为 WebSocket 代理操作初始化追踪器
 var websocketTracer = otel.Tracer("proxy:websocket")
 
-// WebSocketProxy 设置 WebSocket 代理
+// WebSocketProxy 管理 WebSocket 代理，包括连接池和负载均衡
 type WebSocketProxy struct {
-	pool *WebSocketPool
-	lb   loadbalancer.LoadBalancer
+	pool *WebSocketPool            // WebSocket 连接池
+	lb   loadbalancer.LoadBalancer // 负载均衡器
 }
 
-// NewWebSocketProxy 创建 WebSocket 代理实例
+// NewWebSocketProxy 根据配置创建并初始化 WebSocketProxy 实例
 func NewWebSocketProxy(cfg *config.Config) *WebSocketProxy {
 	lb, err := loadbalancer.NewLoadBalancer(cfg.Routing.LoadBalancer, cfg)
 	if err != nil {
-		logger.Error("创建负载均衡器失败", zap.Error(err))
-		lb = loadbalancer.NewRoundRobin()
+		logger.Error("Failed to initialize load balancer",
+			zap.String("type", cfg.Routing.LoadBalancer),
+			zap.Error(err))
+		lb = loadbalancer.NewRoundRobin() // 初始化失败时回退到轮询
 	}
 	return &WebSocketProxy{
 		pool: NewWebSocketPool(cfg),
@@ -42,128 +46,136 @@ func NewWebSocketProxy(cfg *config.Config) *WebSocketProxy {
 	}
 }
 
-// SetupWebSocketProxy 设置 WebSocket 代理路由
+// SetupWebSocketProxy 根据提供的规则配置 WebSocket 代理路由
 func (wp *WebSocketProxy) SetupWebSocketProxy(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.GetWebSocketRules()
 	if len(rules) == 0 {
-		logger.Info("未找到 WebSocket 路由规则")
+		logger.Info("No WebSocket routing rules found in configuration")
 		return
 	}
+
+	poolMgr := newPoolManager(cfg)
 
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 		CheckOrigin: func(r *http.Request) bool {
-			return true // 可根据配置调整跨域策略
+			return true // 可根据配置调整跨源策略
 		},
 	}
 
 	for path, targetRules := range rules {
-		logger.Info("设置 WebSocket 代理",
+		logger.Info("Setting up WebSocket proxy route",
 			zap.String("path", path),
 			zap.Any("targets", targetRules))
-		r.GET(path, wp.createWebSocketHandler(targetRules, upgrader, cfg))
+		r.GET(path, wp.createWebSocketHandler(targetRules, upgrader, cfg, poolMgr))
 	}
 }
 
-// createWebSocketHandler 创建 WebSocket 处理函数
-func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgrader websocket.Upgrader, cfg *config.Config) gin.HandlerFunc {
+// createWebSocketHandler 创建 WebSocket 连接的处理函数
+func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgrader websocket.Upgrader, cfg *config.Config, poolMgr *objectPoolManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 从 HTTP 请求中提取追踪上下文
+		// 从 HTTP 请求头中提取追踪上下文
 		ctx := otel.GetTextMapPropagator().Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
 		ctx, connectSpan := websocketTracer.Start(ctx, "WebSocket.Connect",
 			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
 		defer connectSpan.End()
 
-		// 升级客户端连接为 WebSocket
+		// 将客户端连接升级为 WebSocket
 		clientConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			connectSpan.RecordError(err)
-			connectSpan.SetStatus(codes.Error, "Upgrade failed")
-			logger.Error("WebSocket 升级失败",
+			connectSpan.SetStatus(codes.Error, "Failed to upgrade connection")
+			logger.Error("Failed to upgrade client connection to WebSocket",
 				zap.String("path", c.Request.URL.Path),
 				zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "WebSocket 升级失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upgrade to WebSocket"})
 			return
 		}
 		defer clientConn.Close()
 
-		// 增加活跃连接数
+		// 跟踪活跃的 WebSocket 连接数
 		observability.ActiveWebSocketConnections.Inc()
-		defer observability.ActiveWebSocketConnections.Dec() // 连接关闭时减少
+		defer observability.ActiveWebSocketConnections.Dec()
 
-		// 选择目标（支持负载均衡）
-		targets := make([]string, len(rules))
-		for i, rule := range rules {
-			targets[i] = rule.Target
+		// 使用对象池管理器获取目标切片
+		targets := poolMgr.getTargets(len(rules))
+		defer poolMgr.putTargets(targets)
+
+		for _, rule := range rules {
+			targets = append(targets, rule.Target)
 		}
 		target := wp.lb.SelectTarget(targets, c.Request)
 		if target == "" {
-			connectSpan.SetStatus(codes.Error, "No target available")
-			logger.Warn("无可用 WebSocket 目标",
+			connectSpan.SetStatus(codes.Error, "No available target")
+			logger.Warn("No available WebSocket target found",
 				zap.String("path", c.Request.URL.Path))
-			clientConn.WriteMessage(websocket.TextMessage, []byte("无可用目标"))
+			clientConn.WriteMessage(websocket.TextMessage, []byte("No available target"))
 			return
 		}
-		logger.Debug("负载均衡选择的目标", zap.String("target", target))
+		logger.Debug("Selected WebSocket target by load balancer",
+			zap.String("target", target))
 
-		// 验证 target 是否为有效的 WebSocket URL
+		// 验证目标是否为有效的 WebSocket URL
 		targetURL, err := url.Parse(target)
 		if err != nil || (targetURL.Scheme != "ws" && targetURL.Scheme != "wss") {
+			health.GetGlobalHealthChecker().UpdateRequestCount(target, false)
 			connectSpan.RecordError(err)
-			connectSpan.SetStatus(codes.Error, "Backend connect failed")
-			logger.Error("无效的 WebSocket 目标 URL",
+			connectSpan.SetStatus(codes.Error, "Invalid backend URL")
+			logger.Error("Invalid WebSocket target URL detected",
 				zap.String("target", target),
 				zap.Error(err))
-			clientConn.WriteMessage(websocket.TextMessage, []byte("无效的目标地址"))
+			clientConn.WriteMessage(websocket.TextMessage, []byte("Invalid target address"))
 			return
 		}
 
-		// 获取请求路径并移除配置中的 WebSocket 前缀
+		// 调整请求路径，去除 WebSocket 前缀
 		originalPath := c.Request.URL.Path
 		wsPrefix := cfg.WebSocket.Prefix
 		adjustedPath := strings.TrimPrefix(originalPath, wsPrefix)
 		if adjustedPath == originalPath {
-			logger.Warn("路径未包含 WebSocket 前缀，无需调整",
+			logger.Warn("Request path lacks WebSocket prefix, no adjustment applied",
 				zap.String("path", originalPath),
 				zap.String("prefix", wsPrefix))
 		} else {
-			logger.Info("调整 WebSocket 路径，移除前缀",
-				zap.String("original_path", originalPath),
-				zap.String("adjusted_path", adjustedPath),
+			logger.Info("Adjusted WebSocket path by removing prefix",
+				zap.String("originalPath", originalPath),
+				zap.String("adjustedPath", adjustedPath),
 				zap.String("prefix", wsPrefix))
 		}
 
-		// 拼接完整目标路径
+		// 构造完整的转发目标 URL
 		fullTarget := target
 		if adjustedPath != "" && adjustedPath != "/" {
-			// 使用 url.URL 处理路径，确保格式正确
 			targetURL.Path = path.Join(targetURL.Path, adjustedPath)
 			fullTarget = targetURL.String()
 		}
-		logger.Debug("最终转发目标", zap.String("fullTarget", fullTarget))
+		logger.Debug("Determined final WebSocket forwarding target",
+			zap.String("fullTarget", fullTarget))
 
-		// 从连接池获取或创建后端连接
+		// 从连接池获取或创建后端 WebSocket 连接
 		backendConn, err := wp.pool.GetConn(fullTarget)
 		if err != nil {
+			health.GetGlobalHealthChecker().UpdateRequestCount(target, false)
 			connectSpan.RecordError(err)
-			connectSpan.SetStatus(codes.Error, "Backend connect failed")
-			logger.Error("获取后端 WebSocket 连接失败",
+			connectSpan.SetStatus(codes.Error, "Failed to connect to backend")
+			logger.Error("Failed to establish backend WebSocket connection",
 				zap.String("fullTarget", fullTarget),
 				zap.Error(err))
-			clientConn.WriteMessage(websocket.TextMessage, []byte("后端连接失败"))
+			clientConn.WriteMessage(websocket.TextMessage, []byte("Backend connection failed"))
 			return
 		}
 
-		// 双向消息透传
+		// 双向转发客户端与后端之间的消息
 		errCh := make(chan error, 2)
 		go wp.forwardMessages(ctx, clientConn, backendConn, "client-to-backend", errCh)
 		go wp.forwardMessages(ctx, backendConn, clientConn, "backend-to-client", errCh)
 
 		if err := <-errCh; err != nil {
+			health.GetGlobalHealthChecker().UpdateRequestCount(target, false)
 			connectSpan.RecordError(err)
 			connectSpan.SetStatus(codes.Error, "Message forwarding failed")
-			logger.Error("WebSocket 消息透传失败",
+			logger.Error("WebSocket message forwarding failed",
 				zap.String("path", c.Request.URL.Path),
 				zap.String("fullTarget", fullTarget),
 				zap.Error(err))
@@ -171,6 +183,7 @@ func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgr
 	}
 }
 
+// forwardMessages 在两个 WebSocket 连接之间转发消息
 func (wp *WebSocketProxy) forwardMessages(ctx context.Context, from, to *websocket.Conn, direction string, errCh chan<- error) {
 	for {
 		_, span := websocketTracer.Start(ctx, "WebSocket.Message",
@@ -178,7 +191,7 @@ func (wp *WebSocketProxy) forwardMessages(ctx context.Context, from, to *websock
 		msgType, msg, err := from.ReadMessage()
 		if err != nil {
 			span.RecordError(err)
-			span.SetStatus(codes.Error, "Read failed")
+			span.SetStatus(codes.Error, "Failed to read message")
 			span.End()
 			errCh <- err
 			return
@@ -186,17 +199,19 @@ func (wp *WebSocketProxy) forwardMessages(ctx context.Context, from, to *websock
 		err = to.WriteMessage(msgType, msg)
 		if err != nil {
 			span.RecordError(err)
-			span.SetStatus(codes.Error, "Write failed")
+			span.SetStatus(codes.Error, "Failed to write message")
 			span.End()
 			errCh <- err
 			return
 		}
-		span.SetStatus(codes.Ok, "Message forwarded")
+		span.SetStatus(codes.Ok, "Message forwarded successfully")
+		health.GetGlobalHealthChecker().UpdateRequestCount(to.LocalAddr().String(), true)
 		span.End()
 	}
 }
 
-// Close 关闭 WebSocket 代理并清理资源
+// Close 关闭 WebSocket 代理并释放资源
 func (wp *WebSocketProxy) Close() {
 	wp.pool.Close()
+	logger.Info("WebSocket proxy closed successfully")
 }

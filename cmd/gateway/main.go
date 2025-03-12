@@ -3,10 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/penwyp/mini-gateway/internal/core/observability"
-	"github.com/penwyp/mini-gateway/internal/core/traffic"
-	"github.com/penwyp/mini-gateway/internal/middleware/auth"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"github.com/penwyp/mini-gateway/plugins"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,13 +11,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
+	"github.com/penwyp/mini-gateway/internal/core/health"
+	"github.com/penwyp/mini-gateway/internal/core/observability"
 	"github.com/penwyp/mini-gateway/internal/core/routing"
 	"github.com/penwyp/mini-gateway/internal/core/security"
+	"github.com/penwyp/mini-gateway/internal/core/traffic"
 	"github.com/penwyp/mini-gateway/internal/middleware"
+	"github.com/penwyp/mini-gateway/internal/middleware/auth"
 	"github.com/penwyp/mini-gateway/pkg/cache"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -36,8 +38,10 @@ var (
 )
 
 func main() {
+	// 初始化配置
 	cfg := config.InitConfig()
 
+	// 初始化日志系统
 	logger.Init(logger.Config{
 		Level:      cfg.Logger.Level,
 		FilePath:   cfg.Logger.FilePath,
@@ -47,24 +51,29 @@ func main() {
 		Compress:   cfg.Logger.Compress,
 	})
 
+	// 验证路由配置
 	if cfg.Routing.LoadBalancer != "consul" && (cfg.Routing.Rules == nil || len(cfg.Routing.Rules) == 0) {
-		logger.Error("路由规则为空或未在配置中定义")
+		logger.Error("Routing rules are empty or not defined in configuration")
 		os.Exit(1)
 	}
 
-	// 初始化 Redis 和 IP 规则
+	// 初始化缓存和IP规则
 	cache.Init(cfg)
 	if cfg.Middleware.IPAcl {
 		security.InitIPRules(cfg)
 	}
 
-	observability.InitMetrics() // 初始化指标
+	// 初始化监控和健康检查
+	observability.InitMetrics()
+	health.NewHealthChecker(cfg)
 
+	// 初始化RBAC（如果启用）
 	if cfg.Security.AuthMode == "rbac" && cfg.Security.RBAC.Enabled {
 		security.InitRBAC(cfg)
 	}
 
-	logger.Info("网关启动中",
+	// 记录启动信息
+	logger.Info("Starting mini-gateway",
 		zap.String("port", cfg.Server.Port),
 		zap.String("version", Version),
 		zap.String("buildTime", BuildTime),
@@ -75,7 +84,8 @@ func main() {
 		zap.Bool("rbacEnabled", cfg.Security.RBAC.Enabled),
 	)
 
-	logger.Info("Middleware开关",
+	// 记录中间件状态
+	logger.Info("Middleware status",
 		zap.Bool("RateLimit", cfg.Middleware.RateLimit),
 		zap.Bool("IPAcl", cfg.Middleware.IPAcl),
 		zap.Bool("AntiInjection", cfg.Middleware.AntiInjection),
@@ -83,13 +93,19 @@ func main() {
 		zap.Bool("Tracing", cfg.Middleware.Tracing),
 	)
 
-	r := gin.Default()
+	// 初始化Gin路由器
+	gin.SetMode(cfg.Server.GinMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
 	r.Use(requestMetricsMiddleware())
 
-	// 保存漏桶限流器的引用，以便清理
+	// 装载自定义插件
+	plugins.LoadPlugins(r, cfg)
+
+	// 定义漏桶限流器变量
 	var leakyLimiter *traffic.LeakyBucketLimiter
 
-	// 根据配置选择限流算法
+	// 配置限流中间件
 	if cfg.Middleware.RateLimit {
 		switch cfg.Traffic.RateLimit.Algorithm {
 		case "token_bucket":
@@ -98,12 +114,12 @@ func main() {
 			leakyLimiter = traffic.NewLeakyBucketLimiter(cfg.Traffic.RateLimit.QPS, cfg.Traffic.RateLimit.Burst)
 			r.Use(traffic.LeakyBucketRateLimit())
 		default:
-			logger.Error("未知的限流算法", zap.String("algorithm", cfg.Traffic.RateLimit.Algorithm))
+			logger.Error("Unknown rate limiting algorithm", zap.String("algorithm", cfg.Traffic.RateLimit.Algorithm))
 			os.Exit(1)
 		}
 	}
 
-	// 其他中间件
+	// 配置其他中间件
 	if cfg.Middleware.IPAcl {
 		r.Use(security.IPAcl())
 	}
@@ -114,98 +130,128 @@ func main() {
 		r.Use(traffic.Breaker())
 	}
 	if cfg.Middleware.Tracing {
-		// 初始化分布式追踪
 		cleanup := observability.InitTracing(cfg)
 		defer func() {
 			if err := cleanup(context.Background()); err != nil {
-				logger.Error("Failed to shutdown tracer", zap.Error(err))
+				logger.Error("Failed to shut down tracer provider", zap.Error(err))
 			}
 		}()
 		r.Use(middleware.Tracing())
 	}
 
-	// 路由设置
-	r.POST("/login", func(c *gin.Context) {
+	// 设置文件服务路由
+	fileServerRouter := routing.NewFileServerRouter(cfg)
+	fileServerRouter.Setup(r, cfg)
+
+	// 配置基础路由
+	r.POST("/login", loginHandler(cfg))
+	r.GET("/health", healthHandler())
+	r.GET("/status", statusHandler())
+
+	// 配置Prometheus监控端点
+	if cfg.Observability.Prometheus.Enabled {
+		r.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
+	}
+
+	// 设置动态路由
+	logger.Info("Setting up dynamic routing", zap.Any("routing_rules", cfg.Routing.Rules))
+	protected := r.Group("/")
+	if cfg.Middleware.Auth {
+		protected.Use(auth.Auth())
+	}
+	routing.Setup(protected, cfg)
+	logger.Info("Dynamic routing setup completed")
+
+	// 启动服务器
+	listenAddr := ":" + cfg.Server.Port
+	logger.Info("Server starting to listen", zap.String("address", listenAddr))
+	go func() {
+		if err := r.Run(listenAddr); err != nil {
+			logger.Error("Failed to start server", zap.Error(err))
+			os.Exit(1)
+		}
+	}()
+
+	// 优雅关闭处理
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	logger.Info("Shutting down server...")
+
+	// 关闭健康检查
+	health.GetGlobalHealthChecker().Close()
+
+	// 清理漏桶限流器（如果使用）
+	if cfg.Middleware.RateLimit && cfg.Traffic.RateLimit.Algorithm == "leaky_bucket" && leakyLimiter != nil {
+		traffic.CleanupLeakyBucket(leakyLimiter)
+	}
+
+	// 同步日志并退出
+	if err := logger.Sync(); err != nil {
+		logger.Error("Failed to sync logs", zap.Error(err))
+		os.Exit(1)
+	}
+}
+
+// healthHandler 处理健康检查请求
+func healthHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		logger.Info("Received health check request", zap.String("clientIP", c.ClientIP()))
+		c.JSON(200, gin.H{"status": "ok"})
+	}
+}
+
+// statusHandler 处理状态检查请求
+func statusHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		logger.Info("Received status check request", zap.String("clientIP", c.ClientIP()))
+		stats := health.GetGlobalHealthChecker().GetAllStats()
+		c.JSON(200, gin.H{
+			"status": "ok",
+			"data":   stats,
+		})
+	}
+}
+
+// loginHandler 处理登录请求
+func loginHandler(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var creds struct {
 			Username string `json:"username" binding:"required"`
 			Password string `json:"password" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&creds); err != nil {
-			logger.Warn("无效的登录请求", zap.Error(err))
-			c.JSON(400, gin.H{"error": "无效请求"})
+			logger.Warn("Invalid login request", zap.Error(err))
+			c.JSON(400, gin.H{"error": "Invalid request"})
 			return
 		}
 
 		if creds.Username != "admin" || creds.Password != "password" {
-			logger.Warn("登录失败", zap.String("username", creds.Username))
-			c.JSON(401, gin.H{"error": "无效凭证"})
+			logger.Warn("Login failed", zap.String("username", creds.Username))
+			c.JSON(401, gin.H{"error": "Invalid credentials"})
 			return
 		}
 
-		if cfg.Security.AuthMode == "jwt" {
+		switch cfg.Security.AuthMode {
+		case "jwt":
 			token, err := security.GenerateToken(creds.Username)
 			if err != nil {
-				logger.Error("生成JWT令牌失败", zap.Error(err))
-				c.JSON(500, gin.H{"error": "服务器错误"})
+				logger.Error("Failed to generate JWT token", zap.Error(err))
+				c.JSON(500, gin.H{"error": "Server error"})
 				return
 			}
 			c.JSON(200, gin.H{"token": token})
-		} else if cfg.Security.AuthMode == "rbac" {
+		case "rbac":
 			token, err := security.GenerateRBACLoginToken(creds.Username)
 			if err != nil {
-				logger.Error("生成RBAC令牌失败", zap.Error(err))
-				c.JSON(500, gin.H{"error": "服务器错误"})
+				logger.Error("Failed to generate RBAC token", zap.Error(err))
+				c.JSON(500, gin.H{"error": "Server error"})
 				return
 			}
 			c.JSON(200, gin.H{"token": token, "username": creds.Username})
-		} else {
-			c.JSON(200, gin.H{"message": "登录成功", "username": creds.Username})
+		default:
+			c.JSON(200, gin.H{"message": "Login successful", "username": creds.Username})
 		}
-	})
-
-	r.GET("/health", func(c *gin.Context) {
-		logger.Info("健康检查请求", zap.String("clientIP", c.ClientIP()))
-		c.JSON(200, gin.H{"status": "ok"})
-	})
-
-	// Prometheus 监控端点
-	if cfg.Observability.Prometheus.Enabled {
-		r.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
-	}
-
-	logger.Info("开始设置动态路由", zap.Any("routing_rules", cfg.Routing.Rules))
-	// 设置动态路由
-	protected := r.Group("/")
-	if cfg.Middleware.Auth {
-		protected.Use(auth.Auth())
-	}
-
-	routing.Setup(protected, cfg)
-	logger.Info("动态路由设置完成")
-
-	// 启动服务器
-	listenAddr := ":" + cfg.Server.Port
-	logger.Info("服务器开始监听", zap.String("address", listenAddr))
-	if err := r.Run(listenAddr); err != nil {
-		logger.Error("启动服务器失败", zap.Error(err))
-		os.Exit(1)
-	}
-
-	// 优雅关闭（仅在收到信号时执行清理）
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	logger.Info("正在关闭服务器...")
-
-	// 清理漏桶资源（如果使用）
-	if cfg.Middleware.RateLimit && cfg.Traffic.RateLimit.Algorithm == "leaky_bucket" && leakyLimiter != nil {
-		traffic.CleanupLeakyBucket(leakyLimiter)
-	}
-
-	// 同步日志
-	if err := logger.Sync(); err != nil {
-		logger.Error("日志同步失败", zap.Error(err))
-		os.Exit(1)
 	}
 }
 
@@ -216,10 +262,8 @@ func requestMetricsMiddleware() gin.HandlerFunc {
 		method := c.Request.Method
 		path := c.Request.URL.Path
 
-		// 处理请求
 		c.Next()
 
-		// 记录请求总数和延迟
 		status := fmt.Sprintf("%d", c.Writer.Status())
 		observability.RequestsTotal.WithLabelValues(method, path, status).Inc()
 		duration := time.Since(start).Seconds()
@@ -227,19 +271,18 @@ func requestMetricsMiddleware() gin.HandlerFunc {
 	}
 }
 
+// initTracer 初始化分布式追踪
 func initTracer(cfg *config.Config) func(context.Context) error {
-	// 创建 OTLP 导出器（使用 HTTP 协议）
 	exporter, err := otlptracehttp.New(context.Background(),
-		otlptracehttp.WithEndpoint(cfg.Observability.Jaeger.Endpoint), // 如 "localhost:4318"
-		otlptracehttp.WithURLPath("/v1/traces"),                       // OTLP HTTP 路径
-		otlptracehttp.WithInsecure(),                                  // 本地测试时禁用 TLS
+		otlptracehttp.WithEndpoint(cfg.Observability.Jaeger.Endpoint),
+		otlptracehttp.WithURLPath("/v1/traces"),
+		otlptracehttp.WithInsecure(),
 	)
 	if err != nil {
 		logger.Error("Failed to create OTLP exporter", zap.Error(err))
 		os.Exit(1)
 	}
 
-	// 定义服务资源信息
 	res, err := resource.New(context.Background(),
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String("mini-gateway"),
@@ -251,21 +294,18 @@ func initTracer(cfg *config.Config) func(context.Context) error {
 		os.Exit(1)
 	}
 
-	// 创建 TracerProvider
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()), // 采样策略：始终采样
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 
-	// 设置全局 TracerProvider 和 Propagator
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{}, // W3C Trace Context
+		propagation.TraceContext{},
 		propagation.Baggage{},
 	))
 
-	// 返回清理函数
 	return func(ctx context.Context) error {
 		logger.Info("Shutting down tracer provider...")
 		return tp.Shutdown(ctx)

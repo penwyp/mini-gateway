@@ -1,5 +1,6 @@
 server:
   port: "8380"
+  ginMode: "release"
 logger:
   level: "debug"
   filePath: "logs/gateway.log"
@@ -12,7 +13,7 @@ middleware:
   tracing: true
 grpc:
   enabled: true
-  prefix: "/grpc"  # gRPC 路由前缀，可自定义
+  prefix: "/grpc"  # gRPC 路由前缀
   healthCheckPath: "/grpc/health"
   reflection: false
   allowedOrigins:
@@ -21,33 +22,43 @@ websocket:
   enabled: true
   maxIdleConns: 10
   idleTimeout: 5m
-  prefix: "/websocket"  # 新增：WebSocket 路由前缀，可自定义
+  prefix: "/websocket"  # WebSocket 路由前缀
 routing:
   rules:
     "/ws/chat":
       - target: "ws://127.0.0.1:8392"
         weight: 100
         protocol: "websocket"
+        healthCheckPath: "/health"
     "/api/v1/user":
       - target: "http://127.0.0.1:8381"
         weight: 80
         env: "stable"
+        protocol: "http"
+        healthCheckPath: "/status"
       - target: "http://127.0.0.1:8383"
         weight: 20
         env: "canary"
+        protocol: "http"
+        healthCheckPath: "/status"
+    "/api/v1/order":
+      - target: "http://127.0.0.1:8382"
+        weight: 10
+        protocol: "http"
+        healthCheckPath: "/health"
     "/api/v2/hello/*path":
       - target: "127.0.0.1:8391"
         protocol: "grpc"
         weight: 100
+        healthCheckPath: "hello.Health" 
     "/api/v3/hello":
       - target: "127.0.0.1:8391"
         protocol: "grpc"
         weight: 100
-    "/api/v1/order":
-      - target: "http://127.0.0.1:8382"
-        weight: 10
+        healthCheckPath: "hello.Health" 
   engine: "trie"
-  loadBalancer: "round_robin"
+  loadBalancer: "weighted_round_robin"
+  heartbeatInterval: 30
 security:
   authMode: "jwt"
   jwt:
@@ -96,6 +107,15 @@ observability:
     endpoint: "10.2.103.35:8331" # OTLP HTTP 端点，Jaeger 默认支持
     sampler: "always"         # 采样策略：always（全采样）或 ratio（按比例采样）
     sampleRatio: 1.0          # 如果 sampler 为 ratio，此值为采样比例（0.0-1.0）
-plugins:
-  - "log"
-  - "metrics"
+plugin:
+  dir: "bin/plugins"
+  plugins: ["log","ping"]
+performance:
+  memoryPool:
+    enabled: true
+    targetsCapacity: 10  # targets 切片的初始容量
+    rulesCapacity: 10    # filteredRules 切片的初始容量
+  httpPoolEnabled: true
+fileServer:
+  staticFilePath: "./data"
+  enabledFastHttp: false
