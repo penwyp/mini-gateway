@@ -53,6 +53,10 @@ func validateRules(cfg *config.Config) {
 // wsProxy 全局变量，用于管理 WebSocket 代理
 var wsProxy *WebSocketProxy
 
+func Refresh() {
+
+}
+
 // Setup 初始化路由引擎并配置路由规则，包括 gRPC 和 WebSocket 代理
 func Setup(protected gin.IRouter, cfg *config.Config) {
 	logger.Info("Loading routing rules from configuration",

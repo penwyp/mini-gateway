@@ -30,6 +30,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// 全局变量保持不变
 var (
 	Version   string
 	BuildTime string
@@ -38,10 +39,29 @@ var (
 )
 
 func main() {
-	// 初始化配置
+	server := initServer()
+
+	// 初始化RBAC
+	if server.Config.Security.AuthMode == "rbac" && server.Config.Security.RBAC.Enabled {
+		security.InitRBAC(server.Config)
+	}
+
+	server.setupMiddleware()
+	server.setupRoutes()
+	server.start()
+}
+
+// Server 结构体封装服务相关组件
+type Server struct {
+	Router *gin.Engine
+	Config *config.Config
+}
+
+// 初始化服务
+func initServer() *Server {
 	cfg := config.InitConfig()
 
-	// 初始化日志系统
+	// 初始化日志
 	logger.Init(logger.Config{
 		Level:      cfg.Logger.Level,
 		FilePath:   cfg.Logger.FilePath,
@@ -51,28 +71,130 @@ func main() {
 		Compress:   cfg.Logger.Compress,
 	})
 
-	// 验证路由配置
+	// 验证配置
+	validateConfig(cfg)
+
+	// 初始化核心组件
+	cache.Init(cfg)
+	observability.InitMetrics()
+	health.NewHealthChecker(cfg)
+
+	return &Server{
+		Router: setupGinRouter(cfg),
+		Config: cfg,
+	}
+}
+
+// 配置验证
+func validateConfig(cfg *config.Config) {
 	if cfg.Routing.LoadBalancer != "consul" && (cfg.Routing.Rules == nil || len(cfg.Routing.Rules) == 0) {
 		logger.Error("Routing rules are empty or not defined in configuration")
 		os.Exit(1)
 	}
+}
 
-	// 初始化缓存和IP规则
-	cache.Init(cfg)
+// 初始化Gin路由器
+func setupGinRouter(cfg *config.Config) *gin.Engine {
+	gin.SetMode(cfg.Server.GinMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(requestMetricsMiddleware())
+	return r
+}
+
+// 配置中间件
+func (s *Server) setupMiddleware() {
+	cfg := s.Config
+
+	// 加载自定义插件
+	plugins.LoadPlugins(s.Router, cfg)
+
+	// 配置安全相关中间件
 	if cfg.Middleware.IPAcl {
 		security.InitIPRules(cfg)
+		s.Router.Use(security.IPAcl())
+	}
+	if cfg.Middleware.AntiInjection {
+		s.Router.Use(security.AntiInjection())
 	}
 
-	// 初始化监控和健康检查
-	observability.InitMetrics()
-	health.NewHealthChecker(cfg)
-
-	// 初始化RBAC（如果启用）
-	if cfg.Security.AuthMode == "rbac" && cfg.Security.RBAC.Enabled {
-		security.InitRBAC(cfg)
+	// 配置流量控制中间件
+	if cfg.Middleware.RateLimit {
+		switch cfg.Traffic.RateLimit.Algorithm {
+		case "token_bucket":
+			s.Router.Use(traffic.TokenBucketRateLimit())
+		case "leaky_bucket":
+			s.Router.Use(traffic.LeakyBucketRateLimit())
+		default:
+			logger.Error("Unknown rate limiting algorithm", zap.String("algorithm", cfg.Traffic.RateLimit.Algorithm))
+			os.Exit(1)
+		}
+	}
+	if cfg.Middleware.Breaker {
+		s.Router.Use(traffic.Breaker())
 	}
 
+	// 配置追踪
+	if cfg.Middleware.Tracing {
+		cleanup := observability.InitTracing(cfg)
+		defer func() {
+			if err := cleanup(context.Background()); err != nil {
+				logger.Error("Failed to shut down tracer provider", zap.Error(err))
+			}
+		}()
+		s.Router.Use(middleware.Tracing())
+	}
+}
+
+// 配置路由
+func (s *Server) setupRoutes() {
+	cfg := s.Config
+
+	// 基本路由
+	s.Router.POST("/login", loginHandler(cfg))
+	s.Router.GET("/health", healthHandler())
+	s.Router.GET("/status", statusHandler())
+
+	// Prometheus监控
+	if cfg.Observability.Prometheus.Enabled {
+		s.Router.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
+	}
+
+	// 文件服务路由
+	fileServerRouter := routing.NewFileServerRouter(cfg)
+	fileServerRouter.Setup(s.Router, cfg)
+
+	// 动态路由
+	logger.Info("Setting up dynamic routing", zap.Any("routing_rules", cfg.Routing.Rules))
+	protected := s.Router.Group("/")
+	if cfg.Middleware.Auth {
+		protected.Use(auth.Auth())
+	}
+	routing.Setup(protected, cfg)
+	logger.Info("Dynamic routing setup completed")
+}
+
+// 启动服务
+func (s *Server) start() {
 	// 记录启动信息
+	logStartupInfo(s.Config)
+
+	// 启动服务器
+	listenAddr := ":" + s.Config.Server.Port
+	logger.Info("Server starting to listen", zap.String("address", listenAddr))
+	go func() {
+		if err := s.Router.Run(listenAddr); err != nil {
+			logger.Error("Failed to start server", zap.Error(err))
+			os.Exit(1)
+		}
+	}()
+
+	// 优雅关闭
+	s.gracefulShutdown()
+}
+
+// 记录启动信息
+func logStartupInfo(cfg *config.Config) {
 	logger.Info("Starting mini-gateway",
 		zap.String("port", cfg.Server.Port),
 		zap.String("version", Version),
@@ -84,7 +206,6 @@ func main() {
 		zap.Bool("rbacEnabled", cfg.Security.RBAC.Enabled),
 	)
 
-	// 记录中间件状态
 	logger.Info("Middleware status",
 		zap.Bool("RateLimit", cfg.Middleware.RateLimit),
 		zap.Bool("IPAcl", cfg.Middleware.IPAcl),
@@ -92,101 +213,16 @@ func main() {
 		zap.Bool("Breaker", cfg.Middleware.Breaker),
 		zap.Bool("Tracing", cfg.Middleware.Tracing),
 	)
+}
 
-	// 初始化Gin路由器
-	gin.SetMode(cfg.Server.GinMode)
-	r := gin.New()
-	r.Use(gin.Recovery())
-	r.Use(requestMetricsMiddleware())
-
-	// 装载自定义插件
-	plugins.LoadPlugins(r, cfg)
-
-	// 定义漏桶限流器变量
-	var leakyLimiter *traffic.LeakyBucketLimiter
-
-	// 配置限流中间件
-	if cfg.Middleware.RateLimit {
-		switch cfg.Traffic.RateLimit.Algorithm {
-		case "token_bucket":
-			r.Use(traffic.TokenBucketRateLimit())
-		case "leaky_bucket":
-			leakyLimiter = traffic.NewLeakyBucketLimiter(cfg.Traffic.RateLimit.QPS, cfg.Traffic.RateLimit.Burst)
-			r.Use(traffic.LeakyBucketRateLimit())
-		default:
-			logger.Error("Unknown rate limiting algorithm", zap.String("algorithm", cfg.Traffic.RateLimit.Algorithm))
-			os.Exit(1)
-		}
-	}
-
-	// 配置其他中间件
-	if cfg.Middleware.IPAcl {
-		r.Use(security.IPAcl())
-	}
-	if cfg.Middleware.AntiInjection {
-		r.Use(security.AntiInjection())
-	}
-	if cfg.Middleware.Breaker {
-		r.Use(traffic.Breaker())
-	}
-	if cfg.Middleware.Tracing {
-		cleanup := observability.InitTracing(cfg)
-		defer func() {
-			if err := cleanup(context.Background()); err != nil {
-				logger.Error("Failed to shut down tracer provider", zap.Error(err))
-			}
-		}()
-		r.Use(middleware.Tracing())
-	}
-
-	// 设置文件服务路由
-	fileServerRouter := routing.NewFileServerRouter(cfg)
-	fileServerRouter.Setup(r, cfg)
-
-	// 配置基础路由
-	r.POST("/login", loginHandler(cfg))
-	r.GET("/health", healthHandler())
-	r.GET("/status", statusHandler())
-
-	// 配置Prometheus监控端点
-	if cfg.Observability.Prometheus.Enabled {
-		r.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
-	}
-
-	// 设置动态路由
-	logger.Info("Setting up dynamic routing", zap.Any("routing_rules", cfg.Routing.Rules))
-	protected := r.Group("/")
-	if cfg.Middleware.Auth {
-		protected.Use(auth.Auth())
-	}
-	routing.Setup(protected, cfg)
-	logger.Info("Dynamic routing setup completed")
-
-	// 启动服务器
-	listenAddr := ":" + cfg.Server.Port
-	logger.Info("Server starting to listen", zap.String("address", listenAddr))
-	go func() {
-		if err := r.Run(listenAddr); err != nil {
-			logger.Error("Failed to start server", zap.Error(err))
-			os.Exit(1)
-		}
-	}()
-
-	// 优雅关闭处理
+// 优雅关闭
+func (s *Server) gracefulShutdown() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Info("Shutting down server...")
 
-	// 关闭健康检查
 	health.GetGlobalHealthChecker().Close()
-
-	// 清理漏桶限流器（如果使用）
-	if cfg.Middleware.RateLimit && cfg.Traffic.RateLimit.Algorithm == "leaky_bucket" && leakyLimiter != nil {
-		traffic.CleanupLeakyBucket(leakyLimiter)
-	}
-
-	// 同步日志并退出
 	if err := logger.Sync(); err != nil {
 		logger.Error("Failed to sync logs", zap.Error(err))
 		os.Exit(1)

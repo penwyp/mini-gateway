@@ -1,4 +1,3 @@
-// test/websocket_service.go
 package main
 
 import (
