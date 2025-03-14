@@ -18,14 +18,12 @@ func NewGinRouter() *GinRouter {
 }
 
 // Setup 在提供的 Gin 路由器中配置 HTTP 路由规则
-func (gr *GinRouter) Setup(r gin.IRouter, cfg *config.Config) {
+func (gr *GinRouter) Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
 	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
 		logger.Warn("No HTTP routing rules found in configuration")
 		return
 	}
-
-	httpProxy := NewHTTPProxy(cfg)
 
 	// 为每个路径注册路由规则
 	for path, targetRules := range rules {

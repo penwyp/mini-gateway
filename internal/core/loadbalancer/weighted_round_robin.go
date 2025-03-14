@@ -20,6 +20,22 @@ type TargetWeight struct {
 	Weight int    // 权重值
 }
 
+func (cb *WeightedRoundRobin) Type() string {
+	return "weighted-round-robin"
+}
+
+func (cb *WeightedRoundRobin) GetActiveTargets() []string {
+	// 返回当前活跃的目标列表
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	targets := make([]string, 0)
+	for _, state := range cb.states {
+		targets = append(targets, state.targets...)
+	}
+	return targets
+}
+
 // WeightedRoundRobin 实现加权轮询负载均衡算法
 type WeightedRoundRobin struct {
 	rules  map[string][]TargetWeight // 预定义的路径到加权目标的映射规则

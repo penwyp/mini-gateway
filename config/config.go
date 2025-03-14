@@ -2,18 +2,26 @@ package config
 
 import (
 	"fmt"
-	"log"
+	"github.com/fsnotify/fsnotify"
+	"go.uber.org/zap"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"github.com/spf13/viper"
-	"go.uber.org/zap"
 )
+
+var configMgr *ConfigManager
+
+// ConfigManager 管理配置及其变更通知
+type ConfigManager struct {
+	CurrentConfig *Config
+	ConfigChan    chan *Config // 用于通知配置变更
+	mutex         sync.RWMutex
+}
 
 // Config 定义网关的配置结构体
 type Config struct {
@@ -31,6 +39,88 @@ type Config struct {
 	WebSocket     WebSocket     `mapstructure:"websocket"`
 	FileServer    FileServer    `mapstructure:"fileServer"`
 	Performance   Performance   `mapstructure:"performance"`
+}
+
+// InitConfig 初始化配置并返回 ConfigManager
+func InitConfig() *ConfigManager {
+	cfg := &Config{}
+
+	v := viper.New()
+	v.SetConfigFile("config/config.yaml")
+	v.SetConfigType("yaml")
+	setDefaultValues(v)
+
+	if err := v.ReadInConfig(); err != nil {
+		logger.Error("Failed to read configuration file", zap.Error(err))
+		os.Exit(1)
+	}
+	if err := v.Unmarshal(cfg); err != nil {
+		logger.Error("Failed to unmarshal configuration", zap.Error(err))
+		os.Exit(1)
+	}
+
+	if err := validateGRPCConfig(cfg); err != nil {
+		logger.Error("gRPC configuration validation failed", zap.Error(err))
+		os.Exit(1)
+	}
+	if err := validateWebSocketConfig(cfg); err != nil {
+		logger.Error("WebSocket configuration validation failed", zap.Error(err))
+		os.Exit(1)
+	}
+
+	configMgr = &ConfigManager{
+		CurrentConfig: cfg,
+		ConfigChan:    make(chan *Config, 1), // 缓冲通道，避免阻塞
+		mutex:         sync.RWMutex{},
+	}
+
+	// 监听配置文件变化以实现热更新
+	v.WatchConfig()
+	v.OnConfigChange(func(e fsnotify.Event) {
+		logger.Info("Configuration file changed", zap.String("file", e.Name))
+		newCfg := &Config{}
+
+		newV := viper.New()
+		newV.SetConfigFile(e.Name)
+		newV.SetConfigType("yaml")
+		setDefaultValues(newV)
+
+		if err := newV.ReadInConfig(); err != nil {
+			logger.Error("Failed to read configuration file", zap.Error(err))
+			os.Exit(1)
+		}
+		if err := newV.Unmarshal(newCfg); err != nil {
+			logger.Error("Failed to unmarshal configuration", zap.Error(err))
+			os.Exit(1)
+		}
+
+		if err := viper.Unmarshal(newCfg); err != nil {
+			logger.Error("Failed to reload configuration", zap.Error(err))
+			return
+		}
+		if err := validateGRPCConfig(newCfg); err != nil {
+			logger.Error("gRPC configuration validation failed on reload", zap.Error(err))
+			return
+		}
+		if err := validateWebSocketConfig(newCfg); err != nil {
+			logger.Error("WebSocket configuration validation failed on reload", zap.Error(err))
+			return
+		}
+
+		configMgr.mutex.Lock()
+		configMgr.CurrentConfig = newCfg
+		configMgr.mutex.Unlock()
+
+		// 通知配置变更
+		select {
+		case configMgr.ConfigChan <- newCfg:
+			logger.Info("Configuration reload notification sent")
+		default:
+			logger.Warn("Config channel full, skipping notification")
+		}
+	})
+
+	return configMgr
 }
 
 // Plugin 插件配置
@@ -263,54 +353,16 @@ type Logger struct {
 	Compress   bool   `mapstructure:"compress"`
 }
 
-var (
-	configInstance *Config
-	configMutex    sync.RWMutex
-)
-
-// LoadConfig 加载配置文件并返回 Config 实例
-func LoadConfig(configPath string) *Config {
-	v := viper.New()
-	v.SetConfigFile(configPath)
-	v.SetConfigType("yaml")
-
-	setDefaultValues(v)
-
-	if err := v.ReadInConfig(); err != nil {
-		log.Fatalf("Failed to read configuration file: %v", err)
-	}
-
-	config := &Config{}
-	if err := v.Unmarshal(config); err != nil {
-		log.Fatalf("Failed to unmarshal configuration: %v", err)
-	}
-
-	configMutex.Lock()
-	configInstance = config
-	configMutex.Unlock()
-
-	// 监听配置文件变化以实现热更新
-	v.WatchConfig()
-	v.OnConfigChange(func(e fsnotify.Event) {
-		logger.Info("Configuration file changed", zap.String("file", e.Name))
-		if err := v.Unmarshal(config); err != nil {
-			logger.Error("Failed to reload configuration", zap.Error(err))
-			return
-		}
-		configMutex.Lock()
-		configInstance = config
-		configMutex.Unlock()
-		logger.Info("Configuration reloaded successfully")
-	})
-
-	return config
+// GetConfig 获取当前配置（线程安全）
+func (cm *ConfigManager) GetConfig() *Config {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	return cm.CurrentConfig
 }
 
 // GetConfig 获取当前全局配置实例（线程安全）
 func GetConfig() *Config {
-	configMutex.RLock()
-	defer configMutex.RUnlock()
-	return configInstance
+	return configMgr.GetConfig()
 }
 
 // setDefaultValues 设置默认配置值
@@ -392,32 +444,6 @@ func setDefaultValues(v *viper.Viper) {
 
 	v.SetDefault("fileServer.staticFilePath", "./data")
 	v.SetDefault("fileServer.enabledFastHttp", true)
-}
-
-// InitConfig 初始化配置（供 main 函数调用）
-func InitConfig() *Config {
-	cfg := &Config{}
-	viper.SetConfigFile("config/config.yaml")
-	if err := viper.ReadInConfig(); err != nil {
-		logger.Error("Failed to read configuration file", zap.Error(err))
-		os.Exit(1)
-	}
-	if err := viper.Unmarshal(cfg); err != nil {
-		logger.Error("Failed to unmarshal configuration", zap.Error(err))
-		os.Exit(1)
-	}
-
-	if err := validateGRPCConfig(cfg); err != nil {
-		logger.Error("gRPC configuration validation failed", zap.Error(err))
-		os.Exit(1)
-	}
-	if err := validateWebSocketConfig(cfg); err != nil {
-		logger.Error("WebSocket configuration validation failed", zap.Error(err))
-		os.Exit(1)
-	}
-
-	configInstance = cfg
-	return cfg
 }
 
 // validateWebSocketConfig 验证 WebSocket 配置

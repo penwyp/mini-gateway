@@ -47,6 +47,27 @@ func NewHTTPProxy(cfg *config.Config) *HTTPProxy {
 	}
 }
 
+func (hp *HTTPProxy) GetLoadBalancerType() string {
+	if hp == nil || hp.loadBalancer == nil {
+		return ""
+	}
+	return hp.loadBalancer.Type()
+}
+
+func (hp *HTTPProxy) GetLoadBalancerActiveTargets() []string {
+	if hp == nil || hp.loadBalancer == nil {
+		return nil
+	}
+	return hp.loadBalancer.GetActiveTargets()
+}
+
+// RefreshLoadBalancer 刷新负载均衡器
+func (hp *HTTPProxy) RefreshLoadBalancer(cfg *config.Config) {
+	hp.loadBalancer = initializeLoadBalancer(cfg)
+	logger.Info("HTTPProxy load balancer refreshed",
+		zap.String("loadBalancerType", cfg.Routing.LoadBalancer))
+}
+
 // SetupHTTPProxy 配置 HTTP 代理路由
 func (hp *HTTPProxy) SetupHTTPProxy(r gin.IRouter, cfg *config.Config) {
 	rules := cfg.Routing.GetHTTPRules()

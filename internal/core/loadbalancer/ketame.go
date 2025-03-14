@@ -38,6 +38,22 @@ func NewKetama(replicas int) *Ketama {
 	return k
 }
 
+func (cb *Ketama) Type() string {
+	return "ketama"
+}
+
+func (cb *Ketama) GetActiveTargets() []string {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	// 返回当前活跃的目标列表
+	targets := make([]string, 0, len(cb.nodes))
+	for _, target := range cb.nodes {
+		targets = append(targets, target)
+	}
+	return targets
+}
+
 // SelectTarget 根据客户端 IP 使用一致性哈希选择目标节点
 func (k *Ketama) SelectTarget(targets []string, req *http.Request) string {
 	// 开始追踪负载均衡选择过程

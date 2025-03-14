@@ -34,6 +34,7 @@ deps:
 
 # 编译项目并将二进制放入 bin 目录
 .PHONY: build
+#build: deps
 build: deps build-plugins
 	@mkdir -p $(BIN_DIR)
 	$(GO) build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME) $(CMD_DIR)/main.go

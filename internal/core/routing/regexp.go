@@ -40,14 +40,12 @@ func NewRegexpRouter(cfg *config.Config) *RegexpRouter {
 }
 
 // Setup 根据配置在 Gin 路由器中设置 HTTP 路由规则
-func (rr *RegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
+func (rr *RegexpRouter) Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
 	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
 		logger.Warn("No HTTP routing rules found in configuration")
 		return
 	}
-
-	httpProxy := NewHTTPProxy(cfg)
 
 	// 编译并注册路由规则
 	for path, targetRules := range rules {

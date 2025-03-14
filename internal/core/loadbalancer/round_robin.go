@@ -2,6 +2,7 @@ package loadbalancer
 
 import (
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/penwyp/mini-gateway/config"
@@ -26,6 +27,22 @@ func NewRoundRobin() LoadBalancer {
 	rr := &RoundRobin{}
 	logger.Info("RoundRobin load balancer initialized")
 	return rr
+}
+
+func (cb *RoundRobin) Type() string {
+	return "round-robin"
+}
+
+func (cb *RoundRobin) GetActiveTargets() []string {
+	// 返回当前活跃的目标列表
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	targets := make([]string, 0)
+	for i := uint32(0); i < cb.next; i++ {
+		targets = append(targets, strconv.Itoa(int(i)))
+	}
+	return targets
 }
 
 // SelectTarget 以轮询方式选择下一个可用目标

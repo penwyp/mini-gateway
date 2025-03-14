@@ -108,7 +108,7 @@ func (t *TrieRegexp) Search(path string) (config.RoutingRules, bool) {
 }
 
 // Setup 根据配置在 Gin 路由器中设置 TrieRegexpRouter 的 HTTP 路由规则
-func (tr *TrieRegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
+func (tr *TrieRegexpRouter) Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
 	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
 		logger.Warn("No HTTP routing rules found in configuration")
@@ -119,8 +119,6 @@ func (tr *TrieRegexpRouter) Setup(r gin.IRouter, cfg *config.Config) {
 	for path, targetRules := range rules {
 		tr.Trie.Insert(path, targetRules)
 	}
-
-	httpProxy := NewHTTPProxy(cfg)
 
 	// 中间件：处理路由匹配和代理转发
 	r.Use(func(c *gin.Context) {

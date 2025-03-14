@@ -118,4 +118,4 @@ performance:
   httpPoolEnabled: true
 fileServer:
   staticFilePath: "./data"
-  enabledFastHttp: false
+  enabledFastHttp: false 

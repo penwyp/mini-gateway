@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+var loadedPlugins = make(map[string]PluginInterface)
+
 // LoadPlugins 扫描插件目录并动态加载 .so 文件中的插件
 func LoadPlugins(r gin.IRouter, cfg *config.Config) {
 	pluginDir := cfg.Plugin.Dir
@@ -60,6 +62,7 @@ func LoadPlugins(r gin.IRouter, cfg *config.Config) {
 			continue
 		}
 
+		loadedPlugins[pluginName] = p
 		// 注册插件
 		p.Setup(r)
 		logger.Info("Plugin loaded successfully",
@@ -91,4 +94,12 @@ func loadPlugin(path string) (PluginInterface, error) {
 	}
 
 	return pluginInfoSymbolFunc(), nil
+}
+
+func GetLoadedPlugins() []PluginInterface {
+	var pluginsList []PluginInterface
+	for _, p := range loadedPlugins {
+		pluginsList = append(pluginsList, p)
+	}
+	return pluginsList
 }

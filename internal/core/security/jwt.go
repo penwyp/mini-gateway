@@ -31,7 +31,7 @@ func InitJWT(cfg *config.Config) {
 
 // GenerateToken 生成 JWT Token
 func GenerateToken(username string) (string, error) {
-	cfg := config.InitConfig()
+	cfg := config.GetConfig()
 	if jwtSecret == "" {
 		InitJWT(cfg)
 	}
@@ -63,9 +63,8 @@ func GenerateToken(username string) (string, error) {
 
 // ValidateToken 验证 JWT Token
 func ValidateToken(tokenString string) (*Claims, error) {
-	cfg := config.InitConfig()
 	if jwtSecret == "" {
-		InitJWT(cfg)
+		InitJWT(config.GetConfig())
 	}
 
 	claims := &Claims{}

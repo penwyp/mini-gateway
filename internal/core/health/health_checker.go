@@ -49,26 +49,38 @@ func GetGlobalHealthChecker() *HealthChecker {
 	return globalHealthChecker
 }
 
-// NewHealthChecker 创建并初始化健康检查服务
-func NewHealthChecker(cfg *config.Config) {
+// InitHealthChecker 创建并初始化健康检查服务
+func InitHealthChecker(cfg *config.Config) *HealthChecker {
+	logger.Info("Initializing health checker service")
+	checker := &HealthChecker{
+		targetStats: make(map[string]*TargetStatus),
+		healthPaths: make(map[string]string),
+		cfg:         cfg,
+		cleanupCh:   make(chan struct{}),
+	}
+	checker.RefreshTargets(cfg) // 初始化时刷新目标
+	go checker.startHeartbeat()
+
 	once.Do(func() {
-		logger.Info("Initializing health checker service")
-		checker := &HealthChecker{
-			targetStats: make(map[string]*TargetStatus),
-			healthPaths: make(map[string]string),
-			cfg:         cfg,
-			cleanupCh:   make(chan struct{}),
-		}
-		checker.initTargets(cfg)
-		go checker.startHeartbeat()
 		globalHealthChecker = checker
 	})
+	return checker
 }
 
-// initTargets 初始化所有目标的状态和健康检查路径
-func (h *HealthChecker) initTargets(cfg *config.Config) {
+// RefreshTargets 刷新目标状态和健康检查路径
+func (h *HealthChecker) RefreshTargets(cfg *config.Config) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// 更新配置
+	h.cfg = cfg
+
+	// 保存旧的状态，以便迁移统计数据（可选）
+	oldStats := h.targetStats
+
+	// 重置目标和健康检查路径
+	h.targetStats = make(map[string]*TargetStatus)
+	h.healthPaths = make(map[string]string)
 
 	for _, rules := range cfg.Routing.Rules {
 		for _, rule := range rules {
@@ -80,15 +92,18 @@ func (h *HealthChecker) initTargets(cfg *config.Config) {
 				continue
 			}
 
-			// 设置默认健康检查路径
+			// 设置健康检查路径
 			if rule.HealthCheckPath != "" {
 				h.healthPaths[host] = rule.HealthCheckPath
 			} else {
 				h.healthPaths[host] = "/health"
 			}
 
-			// 初始化目标状态
-			if _, ok := h.targetStats[host]; !ok {
+			// 初始化或迁移目标状态
+			if oldStat, ok := oldStats[host]; ok {
+				// 迁移旧统计数据
+				h.targetStats[host] = oldStat
+			} else {
 				h.targetStats[host] = &TargetStatus{
 					URL:               rule.Target,
 					Protocol:          rule.Protocol,
@@ -100,14 +115,14 @@ func (h *HealthChecker) initTargets(cfg *config.Config) {
 					ProbeFailureCount: 0,
 					LastProbeTime:     time.Time{},
 				}
-				logger.Info("Initialized health check target",
+				logger.Info("Initialized new health check target",
 					zap.String("target", host),
 					zap.String("protocol", rule.Protocol),
 					zap.String("healthCheckPath", h.healthPaths[host]))
 			}
 		}
 	}
-	logger.Info("Health checker initialization completed",
+	logger.Info("Health checker targets refreshed",
 		zap.Int("totalTargets", len(h.targetStats)))
 }
 
@@ -134,12 +149,7 @@ func normalizeTargetHost(target string) (string, error) {
 
 // startHeartbeat 开始周期性心跳检测
 func (h *HealthChecker) startHeartbeat() {
-	heartbeatInterval := 30 * time.Second
-	if h.cfg.Routing.HeartbeatInterval > 0 {
-		heartbeatInterval = time.Duration(h.cfg.Routing.HeartbeatInterval) * time.Second
-	}
-
-	ticker := time.NewTicker(heartbeatInterval)
+	ticker := time.NewTicker(1 * time.Second) // 初始 ticker，避免第一次等待
 	defer ticker.Stop()
 
 	for {
@@ -148,34 +158,49 @@ func (h *HealthChecker) startHeartbeat() {
 			logger.Info("Stopping heartbeat checks")
 			return
 		case <-ticker.C:
-			h.mu.Lock()
-			logger.Info("Starting heartbeat check",
-				zap.Int("targetCount", len(h.targetStats)),
-				zap.String("timestamp", time.Now().Format("2006-01-02 15:04:05")))
-			for target, stat := range h.targetStats {
-				healthPath, ok := h.healthPaths[target]
-				if !ok {
-					healthPath = "/health"
-				}
-
-				now := time.Now()
-				stat.LastProbeTime = now
-				stat.ProbeRequestCount++
-
-				switch stat.Protocol {
-				case "http", "":
-					h.checkHTTP(target, healthPath, stat)
-				case "grpc":
-					h.checkGRPC(target, stat)
-				case "websocket":
-					h.checkWebSocket(stat.URL, healthPath, stat)
-				default:
-					logger.Warn("Unsupported protocol, skipping health check",
-						zap.String("protocol", stat.Protocol),
-						zap.String("target", target))
-				}
+			h.mu.RLock()
+			heartbeatInterval := 30 * time.Second
+			if h.cfg.Routing.HeartbeatInterval > 0 {
+				heartbeatInterval = time.Duration(h.cfg.Routing.HeartbeatInterval) * time.Second
 			}
-			h.mu.Unlock()
+			h.mu.RUnlock()
+
+			h.performHeartbeatCheck()
+			ticker.Reset(heartbeatInterval) // 重置 ticker 以适应可能的配置变更
+		}
+	}
+}
+
+// performHeartbeatCheck 执行一次心跳检测
+func (h *HealthChecker) performHeartbeatCheck() {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	logger.Info("Starting heartbeat check",
+		zap.Int("targetCount", len(h.targetStats)),
+		zap.String("timestamp", time.Now().Format("2006-01-02 15:04:05")))
+
+	for target, stat := range h.targetStats {
+		healthPath, ok := h.healthPaths[target]
+		if !ok {
+			healthPath = "/health"
+		}
+
+		now := time.Now()
+		stat.LastProbeTime = now
+		stat.ProbeRequestCount++
+
+		switch stat.Protocol {
+		case "http", "":
+			h.checkHTTP(target, healthPath, stat)
+		case "grpc":
+			h.checkGRPC(target, stat)
+		case "websocket":
+			h.checkWebSocket(stat.URL, healthPath, stat)
+		default:
+			logger.Warn("Unsupported protocol, skipping health check",
+				zap.String("protocol", stat.Protocol),
+				zap.String("target", target))
 		}
 	}
 }

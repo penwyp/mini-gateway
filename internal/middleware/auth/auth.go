@@ -6,8 +6,7 @@ import (
 )
 
 func Auth() gin.HandlerFunc {
-	cfg := config.InitConfig()
-	authenticator := NewAuthenticator(cfg)
+	authenticator := NewAuthenticator(config.GetConfig())
 	return func(c *gin.Context) {
 		authenticator.Authenticate(c)
 	}

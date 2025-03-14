@@ -12,7 +12,7 @@ import (
 
 // Router 定义路由引擎的接口
 type Router interface {
-	Setup(r gin.IRouter, cfg *config.Config)
+	Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config)
 }
 
 // isRegexPattern 检查路径是否包含正则表达式字符
@@ -53,12 +53,8 @@ func validateRules(cfg *config.Config) {
 // wsProxy 全局变量，用于管理 WebSocket 代理
 var wsProxy *WebSocketProxy
 
-func Refresh() {
-
-}
-
 // Setup 初始化路由引擎并配置路由规则，包括 gRPC 和 WebSocket 代理
-func Setup(protected gin.IRouter, cfg *config.Config) {
+func Setup(protected gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
 	logger.Info("Loading routing rules from configuration",
 		zap.Any("rules", cfg.Routing.Rules))
 	validateRules(cfg)
@@ -89,7 +85,7 @@ func Setup(protected gin.IRouter, cfg *config.Config) {
 	wsGroup := protected.Group(cfg.WebSocket.Prefix)
 
 	// 配置 HTTP 路由
-	router.Setup(protected, cfg)
+	router.Setup(protected, httpProxy, cfg)
 
 	// 如果启用且存在规则，配置 gRPC 代理
 	if cfg.GRPC.Enabled && len(cfg.Routing.GetGrpcRules()) > 0 {
