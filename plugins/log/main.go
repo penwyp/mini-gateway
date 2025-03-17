@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"github.com/hashicorp/go-version"
-	"github.com/penwyp/mini-gateway/plugins"
 	"log"
 	"time"
+
+	"github.com/hashicorp/go-version"
+	"github.com/penwyp/mini-gateway/plugins"
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/pkg/logger"

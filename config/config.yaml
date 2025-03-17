@@ -1,121 +1,162 @@
 server:
   port: "8380"
-  ginMode: "release"
+  ginmode: release
 logger:
-  level: "debug"
-  filePath: "logs/gateway.log"
+  level: debug
+  filepath: logs/gateway.log
+  maxsize: 100
+  maxbackups: 10
+  maxage: 30
+  compress: true
 middleware:
-  rateLimit: false
-  ipAcl: false
-  antiInjection: false
+  ratelimit: false
+  ipacl: false
+  antiinjection: false
   auth: false
   breaker: false
   tracing: true
 grpc:
   enabled: true
-  prefix: "/grpc"  # gRPC 路由前缀
-  healthCheckPath: "/grpc/health"
+  prefix: /grpc
+  healthcheckpath: /grpc/health
   reflection: false
-  allowedOrigins:
-    - "*"
+  allowedorigins:
+  - '*'
 websocket:
   enabled: true
-  maxIdleConns: 10
-  idleTimeout: 5m
-  prefix: "/websocket"  # WebSocket 路由前缀
+  maxidleconns: 10
+  idletimeout: 5m0s
+  prefix: /websocket
 routing:
   rules:
-    "/ws/chat":
-      - target: "ws://127.0.0.1:8392"
-        weight: 100
-        protocol: "websocket"
-        healthCheckPath: "/health"
-    "/api/v1/user":
-      - target: "http://127.0.0.1:8381"
-        weight: 80
-        env: "stable"
-        protocol: "http"
-        healthCheckPath: "/status"
-      - target: "http://127.0.0.1:8383"
-        weight: 20
-        env: "canary"
-        protocol: "http"
-        healthCheckPath: "/status"
-    "/api/v1/order":
-      - target: "http://127.0.0.1:8382"
-        weight: 10
-        protocol: "http"
-        healthCheckPath: "/health"
-    "/api/v2/hello/*path":
-      - target: "127.0.0.1:8391"
-        protocol: "grpc"
-        weight: 100
-        healthCheckPath: "hello.Health" 
-    "/api/v3/hello":
-      - target: "127.0.0.1:8391"
-        protocol: "grpc"
-        weight: 100
-        healthCheckPath: "hello.Health" 
-  engine: "trie"
-  loadBalancer: "weighted_round_robin"
-  heartbeatInterval: 30
+    /api/v1/order:
+    - target: http://127.0.0.1:8382
+      weight: 10
+      env: ""
+      protocol: http
+      healthcheckpath: /health
+    /api/v1/user:
+    - target: http://127.0.0.1:8381
+      weight: 80
+      env: stable
+      protocol: http
+      healthcheckpath: /status
+    - target: http://127.0.0.1:8383
+      weight: 20
+      env: canary
+      protocol: http
+      healthcheckpath: /status
+    /api/v2/hello/*path:
+    - target: 127.0.0.1:8391
+      weight: 100
+      env: ""
+      protocol: grpc
+      healthcheckpath: hello.Health
+    /api/v3/hello:
+    - target: 127.0.0.1:8391
+      weight: 100
+      env: ""
+      protocol: grpc
+      healthcheckpath: hello.Health
+    /ws/chat:
+    - target: ws://127.0.0.1:8392
+      weight: 100
+      env: ""
+      protocol: websocket
+      healthcheckpath: /health
+  engine: trie
+  loadbalancer: weighted_round_robin
+  heartbeatinterval: 30
+  grayscale:
+    enabled: true
+    weightedrandom: true
+    defaultenv: stable
+    canaryenv: canary
 security:
-  authMode: "jwt"
+  authmode: jwt
   jwt:
-    secret: "change-to-your-secret-key"
-    expiresIn: 7200000
+    secret: change-to-your-secret-key
+    expiresin: 7200000
     enabled: true
   rbac:
     enabled: true
-    modelPath: "config/data/rbac_model.conf"
-    policyPath: "config/data/rbac_policy.csv"
-  ipBlacklist:
-    - "192.168.1.100"
-  ipWhitelist:
-    - "127.0.0.1"
-    - "localhost"
-    - "10.2.100.111"
-  ipUpdateMode: "override" # 可选值：override（覆盖）或 append（追加）
+    modelpath: config/data/rbac_model.conf
+    policypath: config/data/rbac_policy.csv
+  ipblacklist:
+  - 192.168.1.100
+  ipwhitelist:
+  - 127.0.0.1
+  - localhost
+  - 10.2.100.111
+  ipupdatemode: override
 cache:
-  addr: "10.2.103.35:8379"
-  password: "redis123"
+  addr: 10.2.103.35:8379
+  password: redis123
   db: 0
+caching:
+  enabled: true
+  rules:
+  - path: /api/v1/user
+    method: GET
+    threshold: 100
+    ttl: 5m0s
+  - path: /api/v1/order
+    method: GET
+    threshold: 50
+    ttl: 10m0s
 consul:
   enabled: false
-  addr: "10.2.103.35:8300"
+  addr: 10.2.103.35:8300
 traffic:
-  rateLimit:
+  ratelimit:
     enabled: true
-    qps: 1000
+    qps: 1000          # 全局限流
     burst: 3000
-    algorithm: "leaky_bucket"  # 可选值: "token_bucket" 或 "leaky_bucket"
+    algorithm: leaky_bucket
+    ip_limits:         # IP维度限流
+      "192.168.1.0/24":
+        qps: 500
+        burst: 1500
+        enable: true
+    route_limits:      # 路由维度限流
+      "/api/v1/user":
+        qps: 800
+        burst: 2000
+        enable: true
+      "/api/v1/order":
+        qps: 600
+        burst: 1800
+        enable: true
   breaker:
     enabled: true
-    errorRate: 0.5
+    errorrate: 0.5
     timeout: 1000
-    minRequests: 20
-    sleepWindow: 5000
-    maxConcurrent: 100
-    windowSize: 100
-    windowDuration: 10
+    minrequests: 20
+    sleepwindow: 5000
+    maxconcurrent: 100
+    windowsize: 100
+    windowduration: 10
 observability:
   prometheus:
     enabled: true
-    path: "/metrics"
+    path: /metrics
   jaeger:
     enabled: true
-    endpoint: "10.2.103.35:8331" # OTLP HTTP 端点，Jaeger 默认支持
-    sampler: "always"         # 采样策略：always（全采样）或 ratio（按比例采样）
-    sampleRatio: 1.0          # 如果 sampler 为 ratio，此值为采样比例（0.0-1.0）
+    endpoint: 10.2.103.35:8331
+    sampler: always
+    sampleratio: 1
 plugin:
-  dir: "bin/plugins"
-  plugins: ["log","ping"]
+  dir: bin/plugins
+  plugins:
+  - log
+  - ping
 performance:
-  memoryPool:
+  memorypool:
     enabled: true
-    targetsCapacity: 10  # targets 切片的初始容量
-    rulesCapacity: 10    # filteredRules 切片的初始容量
-  httpPoolEnabled: true
+    targetscapacity: 10
+    rulescapacity: 10
+  maxconnsperhost: 512
+  httppoolenabled: true
 fileServer:
-  staticFilePath: "./data"
-  enabledFastHttp: false 
+  staticfilepath: ./data
+  enabledfasthttp: false

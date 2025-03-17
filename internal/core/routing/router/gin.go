@@ -1,8 +1,9 @@
-package routing
+package router
 
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
+	"github.com/penwyp/mini-gateway/internal/core/routing/proxy"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -18,7 +19,7 @@ func NewGinRouter() *GinRouter {
 }
 
 // Setup 在提供的 Gin 路由器中配置 HTTP 路由规则
-func (gr *GinRouter) Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
+func (gr *GinRouter) Setup(r gin.IRouter, httpProxy *proxy.HTTPProxy, cfg *config.Config) {
 	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
 		logger.Warn("No HTTP routing rules found in configuration")
@@ -31,6 +32,6 @@ func (gr *GinRouter) Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Conf
 			zap.String("path", path),
 			zap.Any("targets", targetRules))
 
-		r.Any(path, httpProxy.createHTTPHandler(targetRules))
+		r.Any(path, httpProxy.CreateHTTPHandler(targetRules))
 	}
 }

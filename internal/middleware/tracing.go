@@ -1,8 +1,9 @@
 package middleware
 
 import (
-	"go.opentelemetry.io/otel/codes"
 	"time"
+
+	"go.opentelemetry.io/otel/codes"
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/pkg/logger"

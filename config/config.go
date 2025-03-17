@@ -2,13 +2,15 @@ package config
 
 import (
 	"fmt"
-	"github.com/fsnotify/fsnotify"
-	"go.uber.org/zap"
+	"gopkg.in/yaml.v2"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"go.uber.org/zap"
 
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"github.com/spf13/viper"
@@ -18,9 +20,10 @@ var configMgr *ConfigManager
 
 // ConfigManager 管理配置及其变更通知
 type ConfigManager struct {
-	CurrentConfig *Config
-	ConfigChan    chan *Config // 用于通知配置变更
-	mutex         sync.RWMutex
+	config *Config
+	mutex  sync.RWMutex
+
+	ConfigChan chan *Config // 用于通知配置变更
 }
 
 // Config 定义网关的配置结构体
@@ -32,7 +35,8 @@ type Config struct {
 	Observability Observability `mapstructure:"observability"`
 	Plugin        Plugin        `mapstructure:"plugin"`
 	Logger        Logger        `mapstructure:"logger"`
-	Cache         Redis         `mapstructure:"cache"`
+	Cache         Cache         `mapstructure:"cache"`
+	Caching       Caching       `mapstructure:"caching"`
 	Consul        Consul        `mapstructure:"consul"`
 	Middleware    Middleware    `mapstructure:"middleware"`
 	GRPC          GRPCConfig    `mapstructure:"grpc"`
@@ -69,9 +73,9 @@ func InitConfig() *ConfigManager {
 	}
 
 	configMgr = &ConfigManager{
-		CurrentConfig: cfg,
-		ConfigChan:    make(chan *Config, 1), // 缓冲通道，避免阻塞
-		mutex:         sync.RWMutex{},
+		config:     cfg,
+		ConfigChan: make(chan *Config, 1), // 缓冲通道，避免阻塞
+		mutex:      sync.RWMutex{},
 	}
 
 	// 监听配置文件变化以实现热更新
@@ -108,7 +112,7 @@ func InitConfig() *ConfigManager {
 		}
 
 		configMgr.mutex.Lock()
-		configMgr.CurrentConfig = newCfg
+		configMgr.config = newCfg
 		configMgr.mutex.Unlock()
 
 		// 通知配置变更
@@ -121,6 +125,14 @@ func InitConfig() *ConfigManager {
 	})
 
 	return configMgr
+}
+
+// Grayscale 灰度发布配置
+type Grayscale struct {
+	Enabled        bool   `mapstructure:"enabled"`        // 是否启用灰度发布
+	WeightedRandom bool   `mapstructure:"weightedRandom"` // 是否在灰度发布中使用权重随机路由
+	DefaultEnv     string `mapstructure:"defaultEnv"`     // 默认环境（如 "stable"）
+	CanaryEnv      string `mapstructure:"canaryEnv"`      // 灰度环境（如 "canary"）
 }
 
 // Plugin 插件配置
@@ -199,8 +211,22 @@ type Middleware struct {
 	Tracing       bool `mapstructure:"tracing"`
 }
 
-// Redis Redis 缓存配置
-type Redis struct {
+// Caching 业务缓存策略配置
+type Caching struct {
+	Enabled bool          `mapstructure:"enabled"`
+	Rules   []CachingRule `mapstructure:"rules"`
+}
+
+// CachingRule 定义单个缓存规则
+type CachingRule struct {
+	Path      string        `mapstructure:"path"`
+	Method    string        `mapstructure:"method"`
+	Threshold int           `mapstructure:"threshold"`
+	TTL       time.Duration `mapstructure:"ttl"`
+}
+
+// Cache 缓存配置
+type Cache struct {
 	Addr     string `mapstructure:"addr"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
@@ -243,6 +269,7 @@ type Routing struct {
 	Engine            string                  `mapstructure:"engine"`
 	LoadBalancer      string                  `mapstructure:"loadBalancer"`
 	HeartbeatInterval int                     `mapstructure:"heartbeatInterval"`
+	Grayscale         Grayscale               `mapstructure:"grayscale"`
 }
 
 // GetGrpcRules 获取 gRPC 路由规则
@@ -299,10 +326,12 @@ type RBAC struct {
 
 // TrafficRateLimit 流量限流配置
 type TrafficRateLimit struct {
-	Enabled   bool   `mapstructure:"enabled"`
-	QPS       int    `mapstructure:"qps"`
-	Burst     int    `mapstructure:"burst"`
-	Algorithm string `mapstructure:"algorithm"`
+	Enabled     bool                        `mapstructure:"enabled"`
+	QPS         int                         `mapstructure:"qps"`
+	Burst       int                         `mapstructure:"burst"`
+	Algorithm   string                      `mapstructure:"algorithm"`
+	IPLimits    map[string]TrafficRateLimit `mapstructure:"ip_limits"`    // IP维度限流
+	RouteLimits map[string]TrafficRateLimit `mapstructure:"route_limits"` // 路由维度限流
 }
 
 // TrafficBreaker 熔断器配置
@@ -357,12 +386,47 @@ type Logger struct {
 func (cm *ConfigManager) GetConfig() *Config {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
-	return cm.CurrentConfig
+	return cm.config
 }
 
 // GetConfig 获取当前全局配置实例（线程安全）
 func GetConfig() *Config {
 	return configMgr.GetConfig()
+}
+
+// SetConfig 获取当前全局配置实例（线程安全）
+func SetConfig(c *Config) {
+	configMgr.mutex.Lock()
+	defer configMgr.mutex.Unlock()
+	configMgr.config = c
+}
+
+// InitTestConfigManager 初始化测试配置管理器
+func InitTestConfigManager() {
+	configMgr = &ConfigManager{
+		config: &Config{
+			Routing: Routing{
+				LoadBalancer: "round_robin",
+			},
+			Traffic: Traffic{
+				RateLimit: TrafficRateLimit{
+					Enabled:   true,
+					QPS:       10,
+					Burst:     20,
+					Algorithm: "leaky_bucket",
+					IPLimits: map[string]TrafficRateLimit{
+						"192.168.1.1": {QPS: 5, Burst: 10, Enabled: true},
+					},
+					RouteLimits: map[string]TrafficRateLimit{
+						"/api/v1/user": {QPS: 8, Burst: 15, Enabled: true},
+					},
+				},
+				Breaker: TrafficBreaker{},
+			},
+		},
+		ConfigChan: make(chan *Config, 1), // 缓冲通道，避免阻塞
+		mutex:      sync.RWMutex{},
+	}
 }
 
 // setDefaultValues 设置默认配置值
@@ -506,4 +570,61 @@ func validateGRPCConfig(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+// GetCacheRuleByPath 根据路径获取缓存规则
+func (c *Config) GetCacheRuleByPath(path string) *CachingRule {
+	for _, rule := range c.Caching.Rules {
+		if rule.Path == path {
+			return &rule
+		}
+	}
+	return nil
+}
+
+// SaveConfigToFile 将配置保存到文件并保证字段顺序
+func (cm *ConfigManager) SaveConfigToFile(cfg *Config, filePath string) error {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	// 使用 yaml.MapSlice 保持字段顺序
+	orderedData := yaml.MapSlice{
+		{Key: "server", Value: cfg.Server},
+		{Key: "logger", Value: cfg.Logger},
+		{Key: "middleware", Value: cfg.Middleware},
+		{Key: "grpc", Value: cfg.GRPC},
+		{Key: "websocket", Value: cfg.WebSocket},
+		{Key: "routing", Value: cfg.Routing},
+		{Key: "security", Value: cfg.Security},
+		{Key: "cache", Value: cfg.Cache},
+		{Key: "caching", Value: cfg.Caching},
+		{Key: "consul", Value: cfg.Consul},
+		{Key: "traffic", Value: cfg.Traffic},
+		{Key: "observability", Value: cfg.Observability},
+		{Key: "plugin", Value: cfg.Plugin},
+		{Key: "performance", Value: cfg.Performance},
+		{Key: "fileServer", Value: cfg.FileServer},
+	}
+
+	// 序列化为 YAML 格式
+	out, err := yaml.Marshal(orderedData)
+	if err != nil {
+		return err
+	}
+
+	// 写入文件
+	if err := os.WriteFile(filePath, out, 0644); err != nil {
+		return err
+	}
+
+	logger.Info("配置已保存到文件", zap.String("path", filePath))
+	return nil
+}
+
+// UpdateConfig 更新配置并通知监听者
+func (cm *ConfigManager) UpdateConfig(cfg *Config) {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+	cm.config = cfg
+	cm.ConfigChan <- cfg
 }

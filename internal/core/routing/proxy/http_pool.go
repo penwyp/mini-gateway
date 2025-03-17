@@ -1,4 +1,4 @@
-package routing
+package proxy
 
 import (
 	"net/url"
@@ -63,23 +63,23 @@ func (p *HTTPConnectionPool) initializePool(cfg *config.Config) {
 }
 
 // GetClient 获取或创建指定目标的 HostClient
-func (p *HTTPConnectionPool) GetClient(target string) *fasthttp.HostClient {
+func (p *HTTPConnectionPool) GetClient(target string) (*fasthttp.HostClient, error) {
 	host, err := normalizeTarget(target)
 	if err != nil {
 		logger.Error("Failed to normalize target address",
 			zap.String("target", target),
 			zap.Error(err))
-		return nil
+		return nil, err
 	}
 
 	if client, ok := p.clients.Load(host); ok {
-		return client.(*fasthttp.HostClient)
+		return client.(*fasthttp.HostClient), nil
 	}
 
 	client, _ := p.clients.LoadOrStore(host, p.newHostClient(host))
 	logger.Info("Dynamically created new HostClient",
 		zap.String("host", host))
-	return client.(*fasthttp.HostClient)
+	return client.(*fasthttp.HostClient), nil
 }
 
 // normalizeTarget 从目标 URL 中提取 host:port

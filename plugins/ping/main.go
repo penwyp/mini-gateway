@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
+	"log"
+
 	"github.com/gin-gonic/gin"
 	"github.com/hashicorp/go-version"
 	"github.com/penwyp/mini-gateway/plugins"
-	"log"
 )
 
 const (

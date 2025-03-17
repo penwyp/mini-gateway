@@ -4,16 +4,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/penwyp/mini-gateway/internal/core/routing/proxy"
+	internalrouter "github.com/penwyp/mini-gateway/internal/core/routing/router"
+
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 )
-
-// Router 定义路由引擎的接口
-type Router interface {
-	Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config)
-}
 
 // isRegexPattern 检查路径是否包含正则表达式字符
 func isRegexPattern(path string) bool {
@@ -50,34 +48,31 @@ func validateRules(cfg *config.Config) {
 	}
 }
 
-// wsProxy 全局变量，用于管理 WebSocket 代理
-var wsProxy *WebSocketProxy
-
 // Setup 初始化路由引擎并配置路由规则，包括 gRPC 和 WebSocket 代理
-func Setup(protected gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
+func Setup(protected gin.IRouter, httpProxy *proxy.HTTPProxy, cfg *config.Config) {
 	logger.Info("Loading routing rules from configuration",
 		zap.Any("rules", cfg.Routing.Rules))
 	validateRules(cfg)
 
 	// 根据配置选择并初始化适当的路由引擎
-	var router Router
+	var router internalrouter.Router
 	switch cfg.Routing.Engine {
 	case "trie":
-		router = NewTrieRouter(cfg)
+		router = internalrouter.NewTrieRouter()
 		logger.Info("Initialized Trie routing engine")
 	case "trie-regexp", "trie_regexp": // 支持连字符和下划线两种变体
-		router = NewTrieRegexpRouter(cfg)
+		router = internalrouter.NewTrieRegexpRouter()
 		logger.Info("Initialized Trie-Regexp routing engine")
 	case "regexp":
-		router = NewRegexpRouter(cfg)
+		router = internalrouter.NewRegexpRouter(cfg)
 		logger.Info("Initialized Regexp routing engine")
 	case "gin":
-		router = NewGinRouter()
+		router = internalrouter.NewGinRouter()
 		logger.Info("Initialized Gin routing engine")
 	default:
 		logger.Warn("Unknown routing engine specified, defaulting to Gin",
 			zap.String("engine", cfg.Routing.Engine))
-		router = NewGinRouter()
+		router = internalrouter.NewGinRouter()
 	}
 
 	// 为 gRPC 和 WebSocket 路由创建分组，使用配置中的前缀
@@ -89,12 +84,12 @@ func Setup(protected gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
 
 	// 如果启用且存在规则，配置 gRPC 代理
 	if cfg.GRPC.Enabled && len(cfg.Routing.GetGrpcRules()) > 0 {
-		SetupGRPCProxy(cfg, grpcGroup)
+		proxy.SetupGRPCProxy(cfg, grpcGroup)
 	}
 
 	// 如果启用且存在规则，配置 WebSocket 代理
 	if cfg.WebSocket.Enabled && len(cfg.Routing.GetWebSocketRules()) > 0 {
-		wsProxy = NewWebSocketProxy(cfg)
+		wsProxy := proxy.NewWebSocketProxy(cfg)
 		wsProxy.SetupWebSocketProxy(wsGroup, cfg)
 		logger.Info("WebSocket proxy configured successfully")
 	}
@@ -106,13 +101,5 @@ func Setup(protected gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
 			// 空处理器依赖特定 Router 实现中的中间件
 			protected.Any(p, func(c *gin.Context) {})
 		}
-	}
-}
-
-// Cleanup 释放 WebSocket 代理相关资源
-func Cleanup() {
-	if wsProxy != nil {
-		wsProxy.Close()
-		logger.Info("WebSocket proxy resources released successfully")
 	}
 }

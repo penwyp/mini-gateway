@@ -19,7 +19,7 @@ var (
 )
 
 // InitRBAC 初始化 Casbin RBAC 规则
-func InitRBAC(cfg *config.Config) {
+func InitRBAC(cfg *config.Config) error {
 	// 从 CSV 文件加载策略
 	e, err := casbin.NewEnforcer(cfg.Security.RBAC.ModelPath, cfg.Security.RBAC.PolicyPath)
 	if err != nil {
@@ -27,7 +27,7 @@ func InitRBAC(cfg *config.Config) {
 			zap.String("modelPath", cfg.Security.RBAC.ModelPath),
 			zap.String("policyPath", cfg.Security.RBAC.PolicyPath),
 			zap.Error(err))
-		panic(err) // 致命错误，生产环境可考虑优雅处理
+		return err // 致命错误，生产环境可考虑优雅处理
 	}
 	enforcer = e
 
@@ -42,6 +42,7 @@ func InitRBAC(cfg *config.Config) {
 		zap.String("modelPath", cfg.Security.RBAC.ModelPath),
 		zap.String("policyPath", cfg.Security.RBAC.PolicyPath),
 		zap.Any("loadedPolicies", loadedPolicies))
+	return nil
 }
 
 // GenerateRBACLoginToken 生成基于机器 ID 的 RBAC 登录 Token

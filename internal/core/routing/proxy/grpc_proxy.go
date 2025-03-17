@@ -1,4 +1,4 @@
-package routing
+package proxy
 
 import (
 	"context"
@@ -30,6 +30,13 @@ import (
 // grpcTracer 为 gRPC 代理初始化追踪器
 var grpcTracer = otel.Tracer("proxy:grpc")
 
+// 新增：允许测试时注入自定义 gRPC 连接创建和处理器注册逻辑
+var newGRPCClient = func(target string, dialOpts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	return grpc.Dial(target, dialOpts...)
+}
+
+var registerHelloServiceHandlerFunc = proto.RegisterHelloServiceHandler
+
 // SetupGRPCProxy 配置 HTTP 到 gRPC 的反向代理
 func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 	mux := runtime.NewServeMux(
@@ -43,13 +50,13 @@ func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 	}
 
 	// 遍历 gRPC 路由规则
-	for path, rules := range cfg.Routing.GetGrpcRules() {
+	for route, rules := range cfg.Routing.GetGrpcRules() {
 		for _, rule := range rules {
 			if rule.Protocol != "grpc" {
 				continue
 			}
 
-			conn, err := grpc.NewClient(rule.Target, dialOpts...)
+			conn, err := newGRPCClient(rule.Target, dialOpts...)
 			if err != nil {
 				logger.Error("Failed to establish gRPC connection",
 					zap.String("target", rule.Target),
@@ -58,7 +65,7 @@ func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 			}
 
 			// 在设置期间注册 gRPC 服务处理器
-			if err := proto.RegisterHelloServiceHandler(context.Background(), mux, conn); err != nil {
+			if err := registerHelloServiceHandlerFunc(context.Background(), mux, conn); err != nil {
 				logger.Error("Failed to register gRPC service handler",
 					zap.String("target", rule.Target),
 					zap.Error(err))
@@ -66,12 +73,12 @@ func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 				continue
 			}
 			logger.Info("Successfully registered gRPC service handler",
-				zap.String("path", path),
+				zap.String("path", route),
 				zap.String("target", rule.Target))
 		}
 
 		// 处理带有上下文传播的传入请求
-		r.Any(path, func(c *gin.Context) {
+		r.Any(route, func(c *gin.Context) {
 			ctx, span := grpcTracer.Start(c.Request.Context(), "GRPCProxy.Handle",
 				trace.WithAttributes(
 					attribute.String("http.method", c.Request.Method),
@@ -113,7 +120,7 @@ func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 
 			// 从路由规则中识别目标
 			target := ""
-			for _, rule := range cfg.Routing.GetGrpcRules()[path] {
+			for _, rule := range cfg.Routing.GetGrpcRules()[route] {
 				if rule.Protocol == "grpc" {
 					target = rule.Target
 					break
@@ -127,7 +134,7 @@ func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 			span.SetStatus(codes.Ok, "gRPC proxy completed successfully")
 		})
 		logger.Info("gRPC proxy route configured successfully",
-			zap.String("path", path))
+			zap.String("path", route))
 	}
 }
 

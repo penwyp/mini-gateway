@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"go.opentelemetry.io/otel"
-	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/reflection"
 	"log"
 	"net"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/reflection"
 
 	"github.com/penwyp/mini-gateway/proto/proto"
 	"google.golang.org/grpc"

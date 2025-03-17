@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/penwyp/mini-gateway/internal/core/loadbalancer"
-	"github.com/penwyp/mini-gateway/plugins"
 	"os"
 	"os/signal"
 	"runtime"
@@ -15,56 +13,51 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/internal/core/health"
+	"github.com/penwyp/mini-gateway/internal/core/loadbalancer"
 	"github.com/penwyp/mini-gateway/internal/core/observability"
 	"github.com/penwyp/mini-gateway/internal/core/routing"
+	"github.com/penwyp/mini-gateway/internal/core/routing/proxy"
 	"github.com/penwyp/mini-gateway/internal/core/security"
 	"github.com/penwyp/mini-gateway/internal/core/traffic"
 	"github.com/penwyp/mini-gateway/internal/middleware"
 	"github.com/penwyp/mini-gateway/internal/middleware/auth"
 	"github.com/penwyp/mini-gateway/pkg/cache"
 	"github.com/penwyp/mini-gateway/pkg/logger"
+	"github.com/penwyp/mini-gateway/plugins"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"go.uber.org/zap"
 )
 
 var (
-	Version   string
-	BuildTime string
-	GitCommit string
-	GoVersion string
+	Version   string // 版本号
+	BuildTime string // 构建时间
+	GitCommit string // Git 提交哈希
+	GoVersion string // Go 版本
 
-	startTime = time.Now() // 记录程序启动时间
-	server    *Server      // 全局 Server 实例，便于访问
+	startTime = time.Now() // 程序启动时间
+	server    *Server      // 全局 Server 实例
 )
 
 func main() {
-	configMgr := config.InitConfig()
-	server = initServer(configMgr)
+	configMgr := config.InitConfig() // 初始化配置管理器
+	server = initServer(configMgr)   // 初始化服务
 
-	// 启动配置刷新监听
-	go refreshConfig(server, configMgr)
-
-	server.start()
+	go refreshConfig(server, configMgr) // 启动配置刷新监听协程
+	server.start()                      // 启动服务
 }
 
 // Server 结构体封装服务相关组件
 type Server struct {
-	Router         *gin.Engine
-	ConfigMgr      *config.ConfigManager
-	TracingCleanup func(context.Context) error // 追踪清理函数
-	LoadBalancer   loadbalancer.LoadBalancer   // 动态更新的负载均衡器
-	HTTPProxy      *routing.HTTPProxy
+	Router         *gin.Engine                 // Gin 路由引擎
+	ConfigMgr      *config.ConfigManager       // 配置管理器
+	TracingCleanup func(context.Context) error // 分布式追踪清理函数
+	LoadBalancer   loadbalancer.LoadBalancer   // 负载均衡器
+	HTTPProxy      *proxy.HTTPProxy            // HTTP 代理
 }
 
-// 初始化服务
+// initServer 初始化服务实例
 func initServer(configMgr *config.ConfigManager) *Server {
-	cfg := configMgr.GetConfig()
+	cfg := configMgr.GetConfig() // 获取当前配置
 	// 初始化日志
 	logger.Init(logger.Config{
 		Level:      cfg.Logger.Level,
@@ -75,72 +68,364 @@ func initServer(configMgr *config.ConfigManager) *Server {
 		Compress:   cfg.Logger.Compress,
 	})
 
-	// 验证配置
-	validateConfig(cfg)
-
-	// 初始化核心组件
-	cache.Init(cfg)
-	observability.InitMetrics()
-
-	// 初始化健康检查
-	health.InitHealthChecker(cfg)
+	validateConfig(cfg)           // 验证配置有效性
+	cache.Init(cfg)               // 初始化缓存
+	observability.InitMetrics()   // 初始化监控指标
+	health.InitHealthChecker(cfg) // 初始化健康检查
 
 	s := &Server{
-		Router:    setupGinRouter(cfg),
+		Router:    setupGinRouter(cfg), // 设置 Gin 路由器
 		ConfigMgr: configMgr,
 	}
 
-	// 初始化 RBAC 和中间件
+	// 如果启用了 RBAC 认证，则初始化 RBAC
 	if cfg.Security.AuthMode == "rbac" && cfg.Security.RBAC.Enabled {
 		security.InitRBAC(cfg)
 	}
-	s.setupMiddleware(cfg)
-	s.setupHTTPProxy(cfg)
-	s.setupRoutes(cfg)
+	s.setupMiddleware(cfg) // 配置中间件
+	s.setupHTTPProxy(cfg)  // 配置 HTTP 代理
+	s.setupRoutes(cfg)     // 配置路由
 
 	return s
 }
 
-// statusHandler 完整实现
-func statusHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		logger.Info("Received status check request", zap.String("clientIP", c.ClientIP()))
+// setupRoutes 配置所有路由，简洁调用独立处理函数
+func (s *Server) setupRoutes(cfg *config.Config) {
+	// 基本路由
+	s.Router.GET("/health", s.handleHealth) // 健康检查路由
+	s.Router.GET("/status", s.handleStatus) // 状态检查路由
+	s.Router.POST("/login", s.handleLogin)  // 登录路由
 
-		// 1. 网关自身状态
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-		gatewayStatus := GatewayStatus{
-			Uptime:         time.Since(startTime),
-			Version:        Version,
-			MemoryAlloc:    m.Alloc,
-			GoroutineCount: runtime.NumGoroutine(),
+	// Prometheus 监控路由
+	if cfg.Observability.Prometheus.Enabled {
+		s.Router.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
+	}
+
+	// 文件服务路由
+	fileServerRouter := routing.NewFileServerRouter(cfg)
+	fileServerRouter.Setup(s.Router, cfg)
+
+	// 路由管理 API
+	routeGroup := s.Router.Group("/api/routes")
+	{
+		routeGroup.POST("/add", s.handleAddRoute)         // 添加路由
+		routeGroup.PUT("/update", s.handleUpdateRoute)    // 更新路由
+		routeGroup.DELETE("/delete", s.handleDeleteRoute) // 删除路由
+		routeGroup.GET("/list", s.handleListRoutes)       // 列出所有路由
+	}
+
+	// 保存配置 API
+	s.Router.POST("/api/config/save", s.handleSaveConfig)
+
+	// 动态路由
+	logger.Info("设置动态路由", zap.Any("routing_rules", cfg.Routing.Rules))
+	protected := s.Router.Group("/")
+	if cfg.Middleware.Auth {
+		protected.Use(auth.Auth()) // 应用认证中间件
+	}
+	routing.Setup(protected, s.HTTPProxy, cfg)
+	logger.Info("动态路由设置完成")
+}
+
+// handleHealth 处理健康检查请求
+func (s *Server) handleHealth(c *gin.Context) {
+	logger.Info("收到健康检查请求", zap.String("clientIP", c.ClientIP()))
+	c.JSON(200, gin.H{"status": "ok"})
+}
+
+// handleStatus 处理状态检查请求
+func (s *Server) handleStatus(c *gin.Context) {
+	logger.Info("收到状态检查请求", zap.String("clientIP", c.ClientIP()))
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	gatewayStatus := GatewayStatus{
+		Uptime:         time.Since(startTime),
+		Version:        Version,
+		MemoryAlloc:    m.Alloc,
+		GoroutineCount: runtime.NumGoroutine(),
+	}
+
+	backendStats := health.GetGlobalHealthChecker().GetAllStats()
+	lbStatus := s.getLoadBalancerStatus()
+	pluginStatus := getPluginStatus()
+
+	c.JSON(200, gin.H{
+		"status":        "ok",
+		"gateway":       gatewayStatus,
+		"backend_stats": backendStats,
+		"load_balancer": lbStatus,
+		"plugins":       pluginStatus,
+	})
+}
+
+// handleLogin 处理登录请求
+func (s *Server) handleLogin(c *gin.Context) {
+	var creds struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&creds); err != nil {
+		logger.Warn("无效的登录请求", zap.Error(err))
+		c.JSON(400, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	if creds.Username != "admin" || creds.Password != "password" {
+		logger.Warn("登录失败", zap.String("username", creds.Username))
+		c.JSON(401, gin.H{"error": "Invalid credentials"})
+		return
+	}
+
+	cfg := s.ConfigMgr.GetConfig()
+	switch cfg.Security.AuthMode {
+	case "jwt":
+		token, err := security.GenerateToken(creds.Username)
+		if err != nil {
+			logger.Error("生成 JWT token 失败", zap.Error(err))
+			c.JSON(500, gin.H{"error": "Server error"})
+			return
 		}
+		c.JSON(200, gin.H{"token": token})
+	case "rbac":
+		token, err := security.GenerateRBACLoginToken(creds.Username)
+		if err != nil {
+			logger.Error("生成 RBAC token 失败", zap.Error(err))
+			c.JSON(500, gin.H{"error": "Server error"})
+			return
+		}
+		c.JSON(200, gin.H{"token": token, "username": creds.Username})
+	default:
+		c.JSON(200, gin.H{"message": "Login successful", "username": creds.Username})
+	}
+}
 
-		// 2. 后端目标状态
-		backendStats := health.GetGlobalHealthChecker().GetAllStats()
+// handleAddRoute 处理添加路由请求
+func (s *Server) handleAddRoute(c *gin.Context) {
+	var route struct {
+		Path  string              `json:"path" binding:"required"`
+		Rules config.RoutingRules `json:"rules" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&route); err != nil {
+		c.JSON(400, gin.H{"error": "Invalid request payload"})
+		return
+	}
 
-		// 3. 负载均衡状态
-		lbStatus := server.getLoadBalancerStatus()
+	cfg := s.ConfigMgr.GetConfig()
+	if cfg.Routing.Rules == nil {
+		cfg.Routing.Rules = make(map[string]config.RoutingRules)
+	}
 
-		//// 4. 流量治理状态
-		//trafficStatus := getTrafficStatus(server.ConfigMgr.GetConfig())
+	if _, exists := cfg.Routing.Rules[route.Path]; exists {
+		c.JSON(409, gin.H{"error": "Route already exists"})
+		return
+	}
 
-		//// 5. 可观测性指标
-		//obsStatus := getObservabilityStatus()
+	cfg.Routing.Rules[route.Path] = route.Rules
+	s.ConfigMgr.UpdateConfig(cfg)
+	logger.Info("路由已添加", zap.String("path", route.Path), zap.Any("rules", route.Rules))
+	c.JSON(200, gin.H{"message": "Route added successfully"})
+}
 
-		// 6. 插件状态
-		pluginStatus := getPluginStatus()
+// handleUpdateRoute 处理更新路由请求
+func (s *Server) handleUpdateRoute(c *gin.Context) {
+	var route struct {
+		Path  string              `json:"path" binding:"required"`
+		Rules config.RoutingRules `json:"rules" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&route); err != nil {
+		c.JSON(400, gin.H{"error": "Invalid request payload"})
+		return
+	}
 
-		// 组合响应
-		c.JSON(200, gin.H{
-			"status":        "ok",
-			"gateway":       gatewayStatus,
-			"backend_stats": backendStats,
-			"load_balancer": lbStatus,
-			//"traffic_status": trafficStatus,
-			//"observability":  obsStatus,
-			"plugins": pluginStatus,
-		})
+	path, rules := route.Path, route.Rules
+
+	cfg := s.ConfigMgr.GetConfig()
+	if _, exists := cfg.Routing.Rules[path]; !exists {
+		c.JSON(404, gin.H{"error": "Route not found"})
+		return
+	}
+
+	cfg.Routing.Rules[path] = rules
+	s.ConfigMgr.UpdateConfig(cfg)
+	logger.Info("路由已更新", zap.String("path", path), zap.Any("rules", rules))
+	c.JSON(200, gin.H{"message": "Route updated successfully"})
+}
+
+// handleDeleteRoute 处理删除路由请求
+func (s *Server) handleDeleteRoute(c *gin.Context) {
+	var route struct {
+		Path  string              `json:"path" binding:"required"`
+		Rules config.RoutingRules `json:"rules" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&route); err != nil {
+		c.JSON(400, gin.H{"error": "Invalid request payload"})
+		return
+	}
+
+	path := route.Path
+	cfg := s.ConfigMgr.GetConfig()
+
+	if _, exists := cfg.Routing.Rules[path]; !exists {
+		c.JSON(404, gin.H{"error": "Route not found"})
+		return
+	}
+
+	delete(cfg.Routing.Rules, path)
+	s.ConfigMgr.UpdateConfig(cfg)
+	logger.Info("路由已删除", zap.String("path", path))
+	c.JSON(200, gin.H{"message": "Route deleted successfully"})
+}
+
+// handleListRoutes 处理列出所有路由请求
+func (s *Server) handleListRoutes(c *gin.Context) {
+	cfg := s.ConfigMgr.GetConfig()
+	c.JSON(200, gin.H{"routes": cfg.Routing.Rules})
+}
+
+// handleSaveConfig 处理保存配置请求
+func (s *Server) handleSaveConfig(c *gin.Context) {
+	cfg := s.ConfigMgr.GetConfig()
+	err := s.ConfigMgr.SaveConfigToFile(cfg, "./config/config.yaml")
+	if err != nil {
+		logger.Error("保存配置失败", zap.Error(err))
+		c.JSON(500, gin.H{"error": "Failed to save configuration"})
+		return
+	}
+	logger.Info("配置已保存到文件")
+	c.JSON(200, gin.H{"message": "Configuration saved successfully"})
+}
+
+// setupMiddleware 配置中间件
+func (s *Server) setupMiddleware(cfg *config.Config) {
+	s.Router = setupGinRouter(cfg)
+
+	if cfg.Caching.Enabled {
+		s.Router.Use(middleware.CacheMiddleware(cfg)) // 启用缓存中间件
+	}
+
+	plugins.LoadPlugins(s.Router, cfg) // 加载自定义插件
+
+	if cfg.Middleware.IPAcl {
+		security.InitIPRules(cfg)
+		s.Router.Use(security.IPAcl()) // IP 访问控制
+	}
+	if cfg.Middleware.AntiInjection {
+		s.Router.Use(security.AntiInjection()) // 防注入攻击
+	}
+
+	if cfg.Middleware.RateLimit {
+		switch cfg.Traffic.RateLimit.Algorithm {
+		case "token_bucket":
+			s.Router.Use(traffic.TokenBucketRateLimit()) // 令牌桶限流
+		case "leaky_bucket":
+			s.Router.Use(traffic.LeakyBucketRateLimit()) // 漏桶限流
+		default:
+			logger.Error("未知的限流算法", zap.String("algorithm", cfg.Traffic.RateLimit.Algorithm))
+			os.Exit(1)
+		}
+	}
+	if cfg.Middleware.Breaker {
+		s.Router.Use(traffic.Breaker()) // 熔断器
+	}
+
+	if cfg.Middleware.Tracing {
+		cleanup := observability.InitTracing(cfg)
+		s.TracingCleanup = cleanup
+		s.Router.Use(middleware.Tracing()) // 分布式追踪
+	}
+}
+
+// setupHTTPProxy 配置 HTTP 代理
+func (s *Server) setupHTTPProxy(cfg *config.Config) {
+	s.HTTPProxy = proxy.NewHTTPProxy(cfg)
+	logger.Info("HTTP 代理已初始化，负载均衡类型", zap.String("type", cfg.Routing.LoadBalancer))
+}
+
+// refreshConfig 刷新配置
+func refreshConfig(server *Server, configMgr *config.ConfigManager) {
+	for newCfg := range configMgr.ConfigChan {
+		logger.Info("正在刷新服务配置")
+		server.setupMiddleware(newCfg)
+		server.setupRoutes(newCfg)
+		server.HTTPProxy.RefreshLoadBalancer(newCfg)
+		health.GetGlobalHealthChecker().RefreshTargets(newCfg)
+		logger.Info("服务配置刷新成功")
+	}
+}
+
+// start 启动服务
+func (s *Server) start() {
+	cfg := s.ConfigMgr.GetConfig()
+	logStartupInfo(cfg)
+
+	listenAddr := ":" + cfg.Server.Port
+	logger.Info("服务开始监听", zap.String("address", listenAddr))
+	go func() {
+		if err := s.Router.Run(listenAddr); err != nil {
+			logger.Error("启动服务失败", zap.Error(err))
+			os.Exit(1)
+		}
+	}()
+
+	s.gracefulShutdown()
+}
+
+// logStartupInfo 记录服务启动信息
+func logStartupInfo(cfg *config.Config) {
+	logger.Info("启动 mini-gateway",
+		zap.String("port", cfg.Server.Port),
+		zap.String("version", Version),
+		zap.String("buildTime", BuildTime),
+		zap.String("gitCommit", GitCommit),
+		zap.String("goVersion", GoVersion),
+		zap.Any("routingRules", cfg.Routing.Rules),
+		zap.String("authMode", cfg.Security.AuthMode),
+		zap.Bool("rbacEnabled", cfg.Security.RBAC.Enabled),
+	)
+
+	logger.Info("中间件状态",
+		zap.Bool("RateLimit", cfg.Middleware.RateLimit),
+		zap.Bool("IPAcl", cfg.Middleware.IPAcl),
+		zap.Bool("AntiInjection", cfg.Middleware.AntiInjection),
+		zap.Bool("Breaker", cfg.Middleware.Breaker),
+		zap.Bool("Tracing", cfg.Middleware.Tracing),
+	)
+}
+
+// gracefulShutdown 优雅关闭服务
+func (s *Server) gracefulShutdown() {
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	logger.Info("正在关闭服务...")
+
+	if s.TracingCleanup != nil {
+		if err := s.TracingCleanup(context.Background()); err != nil {
+			logger.Error("关闭追踪提供者失败", zap.Error(err))
+		}
+	}
+	health.GetGlobalHealthChecker().Close()
+	if err := logger.Sync(); err != nil {
+		logger.Error("同步日志失败", zap.Error(err))
+		os.Exit(1)
+	}
+}
+
+// setupGinRouter 初始化 Gin 路由器
+func setupGinRouter(cfg *config.Config) *gin.Engine {
+	gin.SetMode(cfg.Server.GinMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(requestMetricsMiddleware())
+	return r
+}
+
+// validateConfig 验证配置
+func validateConfig(cfg *config.Config) {
+	if cfg.Routing.LoadBalancer != "consul" && (cfg.Routing.Rules == nil || len(cfg.Routing.Rules) == 0) {
+		logger.Error("路由规则为空或未定义")
+		os.Exit(1)
 	}
 }
 
@@ -170,57 +455,12 @@ func (s *Server) getUnhealthyTargets() []string {
 	var unhealthy []string
 	stats := health.GetGlobalHealthChecker().GetAllStats()
 	for _, stat := range stats {
-		// 判断条件：探活失败次数大于成功次数
 		if stat.ProbeFailureCount > stat.ProbeSuccessCount {
 			unhealthy = append(unhealthy, stat.URL)
 		}
 	}
 	return unhealthy
 }
-
-//
-//// TrafficStatus 流量治理状态
-//type TrafficStatus struct {
-//	RateLimitEnabled bool              `json:"rate_limit_enabled"`
-//	QPS              int               `json:"qps"`
-//	Burst            int               `json:"burst"`
-//	BreakerStats     map[string]string `json:"breaker_stats"`
-//}
-//
-//// getTrafficStatus 获取流量治理状态
-//func getTrafficStatus(cfg *config.Config) TrafficStatus {
-//	breakerStats := make(map[string]string)
-//	// 遍历路由规则，获取每个目标的熔断状态
-//	for path, rules := range cfg.Routing.Rules {
-//		for _, rule := range rules {
-//			// 假设 traffic 包提供 GetBreakerStatus 方法
-//			breakerStats[rule.Target] = traffic.GetBreakerStatus(rule.Target) // 需要在 traffic 包中实现
-//		}
-//	}
-//	return TrafficStatus{
-//		RateLimitEnabled: cfg.Middleware.RateLimit,
-//		QPS:              cfg.Traffic.RateLimit.QPS,
-//		Burst:            cfg.Traffic.RateLimit.Burst,
-//		BreakerStats:     breakerStats,
-//	}
-//}
-
-//// ObservabilityStatus 可观测性指标
-//type ObservabilityStatus struct {
-//	RequestsTotal        float64 `json:"requests_total"`
-//	RequestDurationAvg   float64 `json:"request_duration_avg_seconds"`
-//	ActiveWebSocketConns float64 `json:"active_websocket_connections"`
-//}
-//
-//// getObservabilityStatus 获取可观测性指标
-//func getObservabilityStatus() ObservabilityStatus {
-//	// 假设 observability 包提供 GetRequestsTotal 和 GetRequestDurationAvg 方法
-//	return ObservabilityStatus{
-//		RequestsTotal:        observability.GetRequestsTotal(),                 // 需要在 observability 包中实现
-//		RequestDurationAvg:   observability.GetRequestDurationAvg(),            // 需要在 observability 包中实现
-//		ActiveWebSocketConns: observability.ActiveWebSocketConnections.Value(), // 假设是 Gauge
-//	}
-//}
 
 // PluginStatus 插件状态
 type PluginStatus struct {
@@ -248,225 +488,6 @@ func getPluginStatus() []PluginStatus {
 	return status
 }
 
-// 配置验证
-func validateConfig(cfg *config.Config) {
-	if cfg.Routing.LoadBalancer != "consul" && (cfg.Routing.Rules == nil || len(cfg.Routing.Rules) == 0) {
-		logger.Error("Routing rules are empty or not defined in configuration")
-		os.Exit(1)
-	}
-}
-
-// 初始化 Gin 路由器
-func setupGinRouter(cfg *config.Config) *gin.Engine {
-	gin.SetMode(cfg.Server.GinMode)
-	r := gin.New()
-	r.Use(gin.Recovery())
-	r.Use(requestMetricsMiddleware())
-	return r
-}
-
-// 配置中间件
-func (s *Server) setupMiddleware(cfg *config.Config) {
-	// 清空现有中间件（仅保留 Recovery 和 Metrics）
-	s.Router = setupGinRouter(cfg)
-
-	// 加载自定义插件
-	plugins.LoadPlugins(s.Router, cfg)
-
-	// 配置安全相关中间件
-	if cfg.Middleware.IPAcl {
-		security.InitIPRules(cfg)
-		s.Router.Use(security.IPAcl())
-	}
-	if cfg.Middleware.AntiInjection {
-		s.Router.Use(security.AntiInjection())
-	}
-
-	// 配置流量控制中间件
-	if cfg.Middleware.RateLimit {
-		switch cfg.Traffic.RateLimit.Algorithm {
-		case "token_bucket":
-			s.Router.Use(traffic.TokenBucketRateLimit())
-		case "leaky_bucket":
-			s.Router.Use(traffic.LeakyBucketRateLimit())
-		default:
-			logger.Error("Unknown rate limiting algorithm", zap.String("algorithm", cfg.Traffic.RateLimit.Algorithm))
-			os.Exit(1)
-		}
-	}
-	if cfg.Middleware.Breaker {
-		s.Router.Use(traffic.Breaker())
-	}
-
-	// 配置追踪
-	if cfg.Middleware.Tracing {
-		cleanup := observability.InitTracing(cfg)
-		s.TracingCleanup = cleanup
-		s.Router.Use(middleware.Tracing())
-	}
-}
-
-// 配置 HTTP 代理
-func (s *Server) setupHTTPProxy(cfg *config.Config) {
-	s.HTTPProxy = routing.NewHTTPProxy(cfg)
-	logger.Info("HTTP proxy initialized with load balancer", zap.String("type", cfg.Routing.LoadBalancer))
-}
-
-// 配置路由
-func (s *Server) setupRoutes(cfg *config.Config) {
-	// 基本路由
-	s.Router.POST("/login", loginHandler(cfg))
-	s.Router.GET("/health", healthHandler())
-	s.Router.GET("/status", statusHandler())
-
-	// Prometheus 监控
-	if cfg.Observability.Prometheus.Enabled {
-		s.Router.GET(cfg.Observability.Prometheus.Path, gin.WrapH(promhttp.Handler()))
-	}
-
-	// 文件服务路由
-	fileServerRouter := routing.NewFileServerRouter(cfg)
-	fileServerRouter.Setup(s.Router, cfg)
-
-	// 动态路由
-	logger.Info("Setting up dynamic routing", zap.Any("routing_rules", cfg.Routing.Rules))
-	protected := s.Router.Group("/")
-	if cfg.Middleware.Auth {
-		protected.Use(auth.Auth())
-	}
-	routing.Setup(protected, s.HTTPProxy, cfg)
-	logger.Info("Dynamic routing setup completed")
-}
-
-// 刷新配置
-func refreshConfig(server *Server, configMgr *config.ConfigManager) {
-	for newCfg := range configMgr.ConfigChan {
-		logger.Info("Refreshing server configuration")
-
-		// 更新中间件
-		server.setupMiddleware(newCfg)
-
-		// 更新路由
-		server.setupRoutes(newCfg)
-
-		// 刷新负载均衡器
-		server.HTTPProxy.RefreshLoadBalancer(newCfg)
-
-		// 刷新健康检查目标
-		health.GetGlobalHealthChecker().RefreshTargets(newCfg)
-
-		logger.Info("Server configuration refreshed successfully")
-	}
-}
-
-// 启动服务
-func (s *Server) start() {
-	cfg := s.ConfigMgr.GetConfig()
-	logStartupInfo(cfg)
-
-	listenAddr := ":" + cfg.Server.Port
-	logger.Info("Server starting to listen", zap.String("address", listenAddr))
-	go func() {
-		if err := s.Router.Run(listenAddr); err != nil {
-			logger.Error("Failed to start server", zap.Error(err))
-			os.Exit(1)
-		}
-	}()
-
-	s.gracefulShutdown()
-}
-
-// 记录启动信息
-func logStartupInfo(cfg *config.Config) {
-	logger.Info("Starting mini-gateway",
-		zap.String("port", cfg.Server.Port),
-		zap.String("version", Version),
-		zap.String("buildTime", BuildTime),
-		zap.String("gitCommit", GitCommit),
-		zap.String("goVersion", GoVersion),
-		zap.Any("routingRules", cfg.Routing.Rules),
-		zap.String("authMode", cfg.Security.AuthMode),
-		zap.Bool("rbacEnabled", cfg.Security.RBAC.Enabled),
-	)
-
-	logger.Info("Middleware status",
-		zap.Bool("RateLimit", cfg.Middleware.RateLimit),
-		zap.Bool("IPAcl", cfg.Middleware.IPAcl),
-		zap.Bool("AntiInjection", cfg.Middleware.AntiInjection),
-		zap.Bool("Breaker", cfg.Middleware.Breaker),
-		zap.Bool("Tracing", cfg.Middleware.Tracing),
-	)
-}
-
-// 优雅关闭
-func (s *Server) gracefulShutdown() {
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	logger.Info("Shutting down server...")
-
-	if s.TracingCleanup != nil {
-		if err := s.TracingCleanup(context.Background()); err != nil {
-			logger.Error("Failed to shut down tracer provider", zap.Error(err))
-		}
-	}
-	health.GetGlobalHealthChecker().Close()
-	if err := logger.Sync(); err != nil {
-		logger.Error("Failed to sync logs", zap.Error(err))
-		os.Exit(1)
-	}
-}
-
-// healthHandler 处理健康检查请求
-func healthHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		logger.Info("Received health check request", zap.String("clientIP", c.ClientIP()))
-		c.JSON(200, gin.H{"status": "ok"})
-	}
-}
-
-// loginHandler 处理登录请求
-func loginHandler(cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var creds struct {
-			Username string `json:"username" binding:"required"`
-			Password string `json:"password" binding:"required"`
-		}
-		if err := c.ShouldBindJSON(&creds); err != nil {
-			logger.Warn("Invalid login request", zap.Error(err))
-			c.JSON(400, gin.H{"error": "Invalid request"})
-			return
-		}
-
-		if creds.Username != "admin" || creds.Password != "password" {
-			logger.Warn("Login failed", zap.String("username", creds.Username))
-			c.JSON(401, gin.H{"error": "Invalid credentials"})
-			return
-		}
-
-		switch cfg.Security.AuthMode {
-		case "jwt":
-			token, err := security.GenerateToken(creds.Username)
-			if err != nil {
-				logger.Error("Failed to generate JWT token", zap.Error(err))
-				c.JSON(500, gin.H{"error": "Server error"})
-				return
-			}
-			c.JSON(200, gin.H{"token": token})
-		case "rbac":
-			token, err := security.GenerateRBACLoginToken(creds.Username)
-			if err != nil {
-				logger.Error("Failed to generate RBAC token", zap.Error(err))
-				c.JSON(500, gin.H{"error": "Server error"})
-				return
-			}
-			c.JSON(200, gin.H{"token": token, "username": creds.Username})
-		default:
-			c.JSON(200, gin.H{"message": "Login successful", "username": creds.Username})
-		}
-	}
-}
-
 // requestMetricsMiddleware 全局请求监控中间件
 func requestMetricsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -480,46 +501,5 @@ func requestMetricsMiddleware() gin.HandlerFunc {
 		observability.RequestsTotal.WithLabelValues(method, path, status).Inc()
 		duration := time.Since(start).Seconds()
 		observability.RequestDuration.WithLabelValues(method, path).Observe(duration)
-	}
-}
-
-// initTracer 初始化分布式追踪
-func initTracer(cfg *config.Config) func(context.Context) error {
-	exporter, err := otlptracehttp.New(context.Background(),
-		otlptracehttp.WithEndpoint(cfg.Observability.Jaeger.Endpoint),
-		otlptracehttp.WithURLPath("/v1/traces"),
-		otlptracehttp.WithInsecure(),
-	)
-	if err != nil {
-		logger.Error("Failed to create OTLP exporter", zap.Error(err))
-		os.Exit(1)
-	}
-
-	res, err := resource.New(context.Background(),
-		resource.WithAttributes(
-			semconv.ServiceNameKey.String("mini-gateway"),
-			semconv.ServiceVersionKey.String(Version),
-		),
-	)
-	if err != nil {
-		logger.Error("Failed to create resource", zap.Error(err))
-		os.Exit(1)
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	)
-
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
-
-	return func(ctx context.Context) error {
-		logger.Info("Shutting down tracer provider...")
-		return tp.Shutdown(ctx)
 	}
 }

@@ -1,8 +1,10 @@
-package routing
+package router
 
 import (
 	"net/http"
 	"strings"
+
+	"github.com/penwyp/mini-gateway/internal/core/routing/proxy"
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
@@ -35,7 +37,7 @@ type TrieNode struct {
 }
 
 // NewTrieRouter 创建并初始化 TrieRouter 实例
-func NewTrieRouter(cfg *config.Config) *TrieRouter {
+func NewTrieRouter() *TrieRouter {
 	return &TrieRouter{
 		Trie: &Trie{
 			Root: &TrieNode{Children: make(map[rune]*TrieNode)},
@@ -78,7 +80,7 @@ func (t *Trie) Search(path string) (config.RoutingRules, bool) {
 }
 
 // Setup 根据配置在 Gin 路由器中设置 TrieRouter 的 HTTP 路由规则
-func (tr *TrieRouter) Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Config) {
+func (tr *TrieRouter) Setup(r gin.IRouter, httpProxy *proxy.HTTPProxy, cfg *config.Config) {
 	rules := cfg.Routing.GetHTTPRules()
 	if len(rules) == 0 {
 		logger.Warn("No HTTP routing rules found in configuration")
@@ -122,6 +124,6 @@ func (tr *TrieRouter) Setup(r gin.IRouter, httpProxy *HTTPProxy, cfg *config.Con
 
 		// 将追踪上下文传递下游并处理请求
 		c.Request = c.Request.WithContext(ctx)
-		httpProxy.createHTTPHandler(targetRules)(c)
+		httpProxy.CreateHTTPHandler(targetRules)(c)
 	})
 }

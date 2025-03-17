@@ -1,8 +1,10 @@
-package routing
+package proxy
 
 import (
 	"sync"
 	"time"
+
+	"github.com/penwyp/mini-gateway/pkg/util"
 
 	"github.com/gorilla/websocket"
 	"github.com/penwyp/mini-gateway/config"
@@ -17,7 +19,7 @@ type WebSocketPool struct {
 	maxIdle   int                        // 允许的最大空闲连接数
 	idleTime  time.Duration              // 空闲连接关闭的超时时间
 	dialer    *websocket.Dialer          // WebSocket 拨号器
-	poolMgr   *objectPoolManager         // 可重用对象池管理器
+	poolMgr   *util.ObjectPoolManager    // 可重用对象池管理器
 	cleanupCh chan struct{}              // 清理终止信号通道
 }
 
@@ -29,7 +31,7 @@ func NewWebSocketPool(cfg *config.Config) *WebSocketPool {
 		idleTime:  cfg.WebSocket.IdleTimeout,  // 未指定时默认为 5 分钟
 		dialer:    websocket.DefaultDialer,
 		cleanupCh: make(chan struct{}),
-		poolMgr:   newPoolManager(cfg), // 初始化对象池管理器
+		poolMgr:   util.NewPoolManager(cfg), // 初始化对象池管理器
 	}
 	go pool.startCleanup() // 启动后台清理协程
 	logger.Info("WebSocket connection pool initialized",
@@ -115,7 +117,7 @@ func (p *WebSocketPool) startCleanup() {
 			}
 
 			// 使用对象池管理器获取可重用切片
-			targets := p.poolMgr.getTargets(len(p.pool))
+			targets := p.poolMgr.GetTargets(len(p.pool))
 			for target := range p.pool {
 				targets = append(targets, target)
 			}
@@ -138,7 +140,7 @@ func (p *WebSocketPool) startCleanup() {
 			}
 
 			// 将切片归还对象池
-			p.poolMgr.putTargets(targets)
+			p.poolMgr.PutTargets(targets)
 			p.mu.Unlock()
 		}
 	}

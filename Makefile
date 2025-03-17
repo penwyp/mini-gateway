@@ -59,7 +59,7 @@ run: build
 # 测试
 .PHONY: test
 test:
-	$(GO) test -v ./... -cover
+	$(GO) test -v ./...
 
 # 格式化代码
 .PHONY: fmt

@@ -1,13 +1,14 @@
 package auth
 
 import (
+	"net/http"
+	"strings"
+
 	"github.com/penwyp/mini-gateway/internal/core/observability"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"

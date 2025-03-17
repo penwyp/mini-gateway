@@ -2,14 +2,15 @@ package plugins
 
 import (
 	"errors"
-	"github.com/gin-gonic/gin"
-	"github.com/penwyp/mini-gateway/config"
-	"github.com/penwyp/mini-gateway/pkg/logger"
-	"go.uber.org/zap"
 	"os"
 	"path/filepath"
 	"plugin"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/penwyp/mini-gateway/config"
+	"github.com/penwyp/mini-gateway/pkg/logger"
+	"go.uber.org/zap"
 )
 
 var loadedPlugins = make(map[string]PluginInterface)

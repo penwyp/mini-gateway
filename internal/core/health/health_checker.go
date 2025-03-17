@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"net/url"
+
 	"github.com/gorilla/websocket"
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/pkg/logger"
@@ -13,7 +15,6 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
-	"net/url"
 )
 
 // TargetStatus 后端目标的状态信息

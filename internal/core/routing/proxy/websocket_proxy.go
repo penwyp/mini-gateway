@@ -1,4 +1,4 @@
-package routing
+package proxy
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"github.com/penwyp/mini-gateway/pkg/util"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -54,7 +56,7 @@ func (wp *WebSocketProxy) SetupWebSocketProxy(r gin.IRouter, cfg *config.Config)
 		return
 	}
 
-	poolMgr := newPoolManager(cfg)
+	poolMgr := util.NewPoolManager(cfg)
 
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -73,7 +75,7 @@ func (wp *WebSocketProxy) SetupWebSocketProxy(r gin.IRouter, cfg *config.Config)
 }
 
 // createWebSocketHandler 创建 WebSocket 连接的处理函数
-func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgrader websocket.Upgrader, cfg *config.Config, poolMgr *objectPoolManager) gin.HandlerFunc {
+func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgrader websocket.Upgrader, cfg *config.Config, poolMgr *util.ObjectPoolManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 从 HTTP 请求头中提取追踪上下文
 		ctx := otel.GetTextMapPropagator().Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
@@ -99,8 +101,8 @@ func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgr
 		defer observability.ActiveWebSocketConnections.Dec()
 
 		// 使用对象池管理器获取目标切片
-		targets := poolMgr.getTargets(len(rules))
-		defer poolMgr.putTargets(targets)
+		targets := poolMgr.GetTargets(len(rules))
+		defer poolMgr.PutTargets(targets)
 
 		for _, rule := range rules {
 			targets = append(targets, rule.Target)

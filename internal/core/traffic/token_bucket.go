@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,19 +17,34 @@ import (
 	"go.uber.org/zap"
 )
 
-// tokenBucketTracer 为令牌桶限流模块初始化追踪器
 var tokenBucketTracer = otel.Tracer("ratelimit:token-bucket")
 
-// TokenBucketLimiter 使用 uber-go/ratelimit 实现令牌桶限流器
-type TokenBucketLimiter struct {
-	limiter uberRatelimit.Limiter // 底层令牌桶限流器
+// MultiDimensionalTokenBucket 管理多维度限流
+type MultiDimensionalTokenBucket struct {
+	globalLimiter *TokenBucketLimiter
+	ipLimiters    sync.Map // map[string]*TokenBucketLimiter
+	routeLimiters sync.Map // map[string]*TokenBucketLimiter
+	config        *config.Config
+	mutex         sync.Mutex
 }
 
-// NewTokenBucketLimiter 创建新的令牌桶限流器
-// qps: 每秒请求数限制
-// burst: 令牌桶的最大突发容量
+type TokenBucketLimiter struct {
+	limiter uberRatelimit.Limiter
+}
+
+func NewMultiDimensionalTokenBucket(cfg *config.Config) *MultiDimensionalTokenBucket {
+	mdt := &MultiDimensionalTokenBucket{
+		config: cfg,
+	}
+
+	if cfg.Traffic.RateLimit.Enabled {
+		mdt.globalLimiter = NewTokenBucketLimiter(cfg.Traffic.RateLimit.QPS, cfg.Traffic.RateLimit.Burst)
+	}
+
+	return mdt
+}
+
 func NewTokenBucketLimiter(qps, burst int) *TokenBucketLimiter {
-	// 使用 uber-go/ratelimit 初始化限流器，设置 slack 为 burst 以支持突发流量
 	l := &TokenBucketLimiter{
 		limiter: uberRatelimit.New(qps, uberRatelimit.WithSlack(burst)),
 	}
@@ -38,68 +54,101 @@ func NewTokenBucketLimiter(qps, burst int) *TokenBucketLimiter {
 	return l
 }
 
-// Take 获取一个令牌，必要时阻塞以强制执行限流
-// 返回令牌被授予的时间
 func (tbl *TokenBucketLimiter) Take() time.Time {
-	// 阻塞直到有可用令牌，遵循配置的限流速率
 	return tbl.limiter.Take()
 }
 
-// TokenBucketRateLimit 返回基于令牌桶的限流 Gin 中间件
-func TokenBucketRateLimit() gin.HandlerFunc {
-	// 获取全局配置
-	cfg := config.GetConfig()
+func (mdt *MultiDimensionalTokenBucket) getOrCreateLimiter(dimension, key string, qps, burst int) *TokenBucketLimiter {
+	var limiterMap *sync.Map
+	if dimension == "ip" {
+		limiterMap = &mdt.ipLimiters
+	} else if dimension == "route" {
+		limiterMap = &mdt.routeLimiters
+	}
 
-	// 使用配置的 QPS 和突发值创建令牌桶限流器
-	limiter := NewTokenBucketLimiter(cfg.Traffic.RateLimit.QPS, cfg.Traffic.RateLimit.Burst)
+	if limiter, ok := limiterMap.Load(key); ok {
+		return limiter.(*TokenBucketLimiter)
+	}
+
+	mdt.mutex.Lock()
+	defer mdt.mutex.Unlock()
+
+	if limiter, ok := limiterMap.Load(key); ok {
+		return limiter.(*TokenBucketLimiter)
+	}
+
+	limiter := NewTokenBucketLimiter(qps, burst)
+	limiterMap.Store(key, limiter)
+	return limiter
+}
+
+func TokenBucketRateLimit() gin.HandlerFunc {
+	cfg := config.GetConfig()
+	mdt := NewMultiDimensionalTokenBucket(cfg)
 
 	return func(c *gin.Context) {
-		// 如果限流未启用，则跳过
 		if !cfg.Traffic.RateLimit.Enabled {
 			c.Next()
 			return
 		}
 
-		// 开始追踪限流决策
 		_, span := tokenBucketTracer.Start(c.Request.Context(), "RateLimit.TokenBucket",
 			trace.WithAttributes(attribute.String("path", c.Request.URL.Path)))
 		defer span.End()
 
-		// 记录当前时间并获取令牌
-		now := time.Now()
-		takeTime := limiter.Take()
-		waitDuration := takeTime.Sub(now)
+		// 检查全局限流
+		if mdt.globalLimiter != nil {
+			if !checkLimit(mdt.globalLimiter, c, span, "global", "") {
+				return
+			}
+		}
 
-		// 如果获取令牌需要等待，则因限流拒绝请求
-		if waitDuration > 0 {
-			logger.Warn("Rate limit exceeded with token bucket",
-				zap.String("clientIP", c.ClientIP()),
-				zap.String("path", c.Request.URL.Path),
-				zap.Duration("waitDuration", waitDuration),
-				zap.Int("qps", cfg.Traffic.RateLimit.QPS),
-				zap.Int("burst", cfg.Traffic.RateLimit.Burst))
-			span.SetStatus(codes.Error, "Rate limit exceeded")
-			observability.RateLimitRejections.WithLabelValues(c.Request.URL.Path).Inc()
-
-			// 返回 429 Too Many Requests 响应并包含限流详情
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":      "Request rate limit exceeded",
-				"qps":        cfg.Traffic.RateLimit.QPS,
-				"burst":      cfg.Traffic.RateLimit.Burst,
-				"waitTimeMs": waitDuration.Milliseconds(),
-			})
-			c.Abort()
+		// 检查IP限流
+		clientIP := c.ClientIP()
+		ipQPS := cfg.Traffic.RateLimit.QPS / 2
+		ipBurst := cfg.Traffic.RateLimit.Burst / 2
+		ipLimiter := mdt.getOrCreateLimiter("ip", clientIP, ipQPS, ipBurst)
+		if !checkLimit(ipLimiter, c, span, "ip", clientIP) {
 			return
 		}
 
-		// 令牌立即可用，允许请求继续
-		logger.Debug("Request passed token bucket rate limit check",
-			zap.String("clientIP", c.ClientIP()),
-			zap.String("path", c.Request.URL.Path),
-			zap.Time("takeTime", takeTime),
-			zap.Int("qps", cfg.Traffic.RateLimit.QPS),
-			zap.Int("burst", cfg.Traffic.RateLimit.Burst))
+		// 检查路由限流
+		route := c.Request.URL.Path
+		routeQPS := cfg.Traffic.RateLimit.QPS
+		routeBurst := cfg.Traffic.RateLimit.Burst
+		routeLimiter := mdt.getOrCreateLimiter("route", route, routeQPS, routeBurst)
+		if !checkLimit(routeLimiter, c, span, "route", route) {
+			return
+		}
+
 		span.SetStatus(codes.Ok, "Request allowed by token bucket")
 		c.Next()
 	}
+}
+
+func checkLimit(limiter *TokenBucketLimiter, c *gin.Context, span trace.Span, dimension, key string) bool {
+	now := time.Now()
+	takeTime := limiter.Take()
+	waitDuration := takeTime.Sub(now)
+
+	if waitDuration > 0 {
+		logger.Warn("Rate limit exceeded with token bucket",
+			zap.String("dimension", dimension),
+			zap.String("key", key),
+			zap.String("clientIP", c.ClientIP()),
+			zap.String("path", c.Request.URL.Path),
+			zap.Duration("waitDuration", waitDuration))
+		span.SetStatus(codes.Error, "Rate limit exceeded")
+		observability.RateLimitRejections.WithLabelValues(c.Request.URL.Path).Inc()
+
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error":      "Request rate limit exceeded",
+			"dimension":  dimension,
+			"key":        key,
+			"waitTimeMs": waitDuration.Milliseconds(),
+		})
+		c.Abort()
+		return false
+	}
+	return true
 }

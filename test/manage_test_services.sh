@@ -4,9 +4,9 @@
 # 用于管理 mini-gateway 测试服务的启动和停止
 
 # 定义服务文件路径
-HTTP_SERVICE="test/service/http_services.go"
-WEBSOCKET_SERVICE="test/service/websocket_service.go"
-GRPC_SERVICE="test/service/grpc_service.go"
+HTTP_SERVICE="test/service/http/http_services.go"
+WEBSOCKET_SERVICE="test/service/websocket/websocket_service.go"
+GRPC_SERVICE="test/service/grpc/grpc_service.go"
 
 # 日志文件
 LOG_DIR="logs"
