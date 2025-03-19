@@ -5,24 +5,25 @@ import (
 	"context"
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
+	"github.com/penwyp/mini-gateway/internal/core/health"
 	"github.com/penwyp/mini-gateway/pkg/cache"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 	"net/http"
 )
 
-// CacheMiddleware 实现缓存功能的中间件
 func CacheMiddleware() gin.HandlerFunc {
-
 	if config.GetConfig().Caching.Enabled {
 		ctx := context.Background()
 		for urlKey := range config.GetConfig().Routing.Rules {
+			cache.ClearMethodCount(ctx, "GET", urlKey)
+			cache.ClearMethodCount(ctx, "POST", urlKey)
 			cache.ClearRequestCount(ctx, urlKey)
 		}
 	}
 
 	return func(c *gin.Context) {
-		if !config.GetConfig().Caching.Enabled { // 使用 Caching.Enabled
+		if !config.GetConfig().Caching.Enabled {
 			c.Next()
 			return
 		}
@@ -38,7 +39,7 @@ func CacheMiddleware() gin.HandlerFunc {
 
 		// 检查是否已存在缓存
 		if content, found := cache.CheckCache(c.Request.Context(), method, path); found {
-			// 传入当前TTL窗口，更新请求计数
+			// 缓存命中，更新请求计数和缓存命中计数
 			cache.IncrementRequestCount(c.Request.Context(), path, rule.TTL)
 			c.String(http.StatusOK, content)
 			c.Abort()
@@ -52,6 +53,8 @@ func CacheMiddleware() gin.HandlerFunc {
 		// 如果当前窗口内请求次数未达到阈值，不进行缓存
 		if count < int64(rule.Threshold) {
 			c.Next()
+			// 更新请求计数（非缓存命中）
+			health.GetGlobalHealthChecker().UpdateRequestCount(path, c.Writer.Status() == http.StatusOK, false)
 			return
 		}
 
@@ -66,6 +69,11 @@ func CacheMiddleware() gin.HandlerFunc {
 			if err != nil {
 				logger.Error("Failed to cache response", zap.Error(err))
 			}
+			// 更新请求计数（非缓存命中）
+			health.GetGlobalHealthChecker().UpdateRequestCount(path, true, false)
+		} else {
+			// 请求失败，更新计数
+			health.GetGlobalHealthChecker().UpdateRequestCount(path, false, false)
 		}
 	}
 }

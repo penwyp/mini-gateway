@@ -19,10 +19,12 @@ import (
 
 // TargetStatus 后端目标的状态信息
 type TargetStatus struct {
+	Rule              string    `json:"rule"`                // 规则名称
 	URL               string    `json:"url"`                 // 目标地址
 	Protocol          string    `json:"protocol"`            // 协议类型
 	RequestCount      int64     `json:"request_count"`       // 业务请求总数
 	SuccessCount      int64     `json:"success_count"`       // 业务成功次数
+	CacheHitCount     int64     `json:"cache_hit_count"`     // 缓存命中次数
 	FailureCount      int64     `json:"failure_count"`       // 业务失败次数
 	ProbeRequestCount int64     `json:"probe_request_count"` // 探活请求总数
 	ProbeSuccessCount int64     `json:"probe_success_count"` // 探活成功次数
@@ -83,7 +85,7 @@ func (h *HealthChecker) RefreshTargets(cfg *config.Config) {
 	h.targetStats = make(map[string]*TargetStatus)
 	h.healthPaths = make(map[string]string)
 
-	for _, rules := range cfg.Routing.Rules {
+	for ruleName, rules := range cfg.Routing.Rules {
 		for _, rule := range rules {
 			host, err := normalizeTarget(rule)
 			if err != nil {
@@ -106,6 +108,7 @@ func (h *HealthChecker) RefreshTargets(cfg *config.Config) {
 				h.targetStats[host] = oldStat
 			} else {
 				h.targetStats[host] = &TargetStatus{
+					Rule:              ruleName,
 					URL:               rule.Target,
 					Protocol:          rule.Protocol,
 					RequestCount:      0,
@@ -308,7 +311,7 @@ func (h *HealthChecker) checkWebSocket(target, healthPath string, stat *TargetSt
 }
 
 // UpdateRequestCount 更新业务请求计数
-func (h *HealthChecker) UpdateRequestCount(target string, success bool) {
+func (h *HealthChecker) UpdateRequestCount(target string, success bool, cacheHit bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	host, _ := normalizeTargetHost(target)
@@ -316,6 +319,9 @@ func (h *HealthChecker) UpdateRequestCount(target string, success bool) {
 		stat.RequestCount++
 		if success {
 			stat.SuccessCount++
+			if cacheHit {
+				stat.CacheHitCount++ // 缓存命中时增加计数
+			}
 		} else {
 			stat.FailureCount++
 		}
@@ -356,7 +362,10 @@ func (h *HealthChecker) GetAllStats() []TargetStatus {
 		if stats[i].Protocol == stats[j].Protocol {
 			return stats[i].URL < stats[j].URL
 		}
-		return stats[i].Protocol < stats[j].Protocol
+		if stats[i].Rule == stats[j].Rule {
+			return stats[i].Protocol < stats[j].Protocol
+		}
+		return stats[i].Rule < stats[j].Rule
 	})
 	return stats
 }

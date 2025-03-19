@@ -151,7 +151,7 @@ func (s *Server) handleStatus(c *gin.Context) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	gatewayStatus := GatewayStatus{
-		Uptime:         time.Since(startTime),
+		Uptime:         time.Since(startTime).String(),
 		Version:        Version,
 		MemoryAlloc:    m.Alloc,
 		GoroutineCount: runtime.NumGoroutine(),
@@ -161,12 +161,59 @@ func (s *Server) handleStatus(c *gin.Context) {
 	lbStatus := s.getLoadBalancerStatus()
 	pluginStatus := getPluginStatus()
 
-	c.JSON(200, gin.H{
-		"status":        "ok",
-		"gateway":       gatewayStatus,
-		"backend_stats": backendStats,
-		"load_balancer": lbStatus,
-		"plugins":       pluginStatus,
+	cfg := s.ConfigMgr.GetConfig()
+	configSummary := ConfigSummary{
+		Server: ServerConfigSummary{
+			Port:    cfg.Server.Port,
+			GinMode: cfg.Server.GinMode,
+		},
+		Logger: LoggerConfigSummary{
+			Level: cfg.Logger.Level,
+		},
+		Middleware: MiddlewareConfigSummary{
+			RateLimit:     cfg.Middleware.RateLimit,
+			IPAcl:         cfg.Middleware.IPAcl,
+			AntiInjection: cfg.Middleware.AntiInjection,
+			Auth:          cfg.Middleware.Auth,
+			Breaker:       cfg.Middleware.Breaker,
+			Tracing:       cfg.Middleware.Tracing,
+		},
+		Routing: RoutingConfigSummary{
+			Engine:            cfg.Routing.Engine,
+			LoadBalancer:      cfg.Routing.LoadBalancer,
+			HeartbeatInterval: cfg.Routing.HeartbeatInterval,
+		},
+		Security: SecurityConfigSummary{
+			AuthMode:    cfg.Security.AuthMode,
+			JWTEnabled:  cfg.Security.JWT.Enabled,
+			RBACEnabled: cfg.Security.RBAC.Enabled,
+		},
+		Cache: CacheConfigSummary{
+			Addr:           cfg.Cache.Addr,
+			EnabledCaching: cfg.Caching.Enabled,
+		},
+		Traffic: TrafficConfigSummary{
+			RateLimit: TrafficRateLimitSummary{
+				Enabled:   cfg.Traffic.RateLimit.Enabled,
+				QPS:       cfg.Traffic.RateLimit.QPS,
+				Algorithm: cfg.Traffic.RateLimit.Algorithm,
+			},
+			Breaker: TrafficBreakerSummary{
+				Enabled: cfg.Traffic.Breaker.Enabled,
+			},
+		},
+		Observability: ObservabilityConfigSummary{
+			PrometheusEnabled: cfg.Observability.Prometheus.Enabled,
+			JaegerEnabled:     cfg.Observability.Jaeger.Enabled,
+		},
+	}
+
+	c.HTML(200, "status.html", gin.H{
+		"Gateway":       gatewayStatus,
+		"BackendStats":  backendStats,
+		"LoadBalancer":  lbStatus,
+		"Plugins":       pluginStatus,
+		"ConfigSummary": configSummary,
 	})
 }
 
@@ -427,6 +474,7 @@ func setupGinRouter(cfg *config.Config) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(requestMetricsMiddleware())
+	r.LoadHTMLGlob("templates/*") // 加载 templates 目录下的所有模板
 	return r
 }
 
@@ -440,10 +488,10 @@ func validateConfig(cfg *config.Config) {
 
 // GatewayStatus 网关自身状态
 type GatewayStatus struct {
-	Uptime         time.Duration `json:"uptime"`
-	Version        string        `json:"version"`
-	MemoryAlloc    uint64        `json:"memory_alloc_bytes"`
-	GoroutineCount int           `json:"goroutine_count"`
+	Uptime         string `json:"uptime"`
+	Version        string `json:"version"`
+	MemoryAlloc    uint64 `json:"memory_alloc_bytes"`
+	GoroutineCount int    `json:"goroutine_count"`
 }
 
 // getLoadBalancerStatus 获取负载均衡状态
@@ -511,4 +559,70 @@ func requestMetricsMiddleware() gin.HandlerFunc {
 		duration := time.Since(start).Seconds()
 		observability.RequestDuration.WithLabelValues(method, path).Observe(duration)
 	}
+}
+
+type ConfigSummary struct {
+	Server        ServerConfigSummary        `json:"server"`
+	Logger        LoggerConfigSummary        `json:"logger"`
+	Middleware    MiddlewareConfigSummary    `json:"middleware"`
+	Routing       RoutingConfigSummary       `json:"routing"`
+	Security      SecurityConfigSummary      `json:"security"`
+	Cache         CacheConfigSummary         `json:"cache"`
+	Traffic       TrafficConfigSummary       `json:"traffic"`
+	Observability ObservabilityConfigSummary `json:"observability"`
+}
+
+type ServerConfigSummary struct {
+	Port    string `json:"port"`
+	GinMode string `json:"gin_mode"`
+}
+
+type LoggerConfigSummary struct {
+	Level string `json:"level"`
+}
+
+type MiddlewareConfigSummary struct {
+	RateLimit     bool `json:"rate_limit"`
+	IPAcl         bool `json:"ip_acl"`
+	AntiInjection bool `json:"anti_injection"`
+	Auth          bool `json:"auth"`
+	Breaker       bool `json:"breaker"`
+	Tracing       bool `json:"tracing"`
+}
+
+type RoutingConfigSummary struct {
+	Engine            string `json:"engine"`
+	LoadBalancer      string `json:"load_balancer"`
+	HeartbeatInterval int    `json:"heartbeat_interval"`
+}
+
+type SecurityConfigSummary struct {
+	AuthMode    string `json:"auth_mode"`
+	JWTEnabled  bool   `json:"jwt_enabled"`
+	RBACEnabled bool   `json:"rbac_enabled"`
+}
+
+type CacheConfigSummary struct {
+	Addr           string `json:"addr"`
+	EnabledCaching bool   `json:"enabled_caching"`
+}
+
+type TrafficConfigSummary struct {
+	RateLimit TrafficRateLimitSummary `json:"rate_limit"`
+	Breaker   TrafficBreakerSummary   `json:"breaker"`
+}
+
+type TrafficRateLimitSummary struct {
+	Enabled   bool   `json:"enabled"`
+	QPS       int    `json:"qps"`
+	Algorithm string `json:"algorithm"`
+}
+
+type TrafficBreakerSummary struct {
+	Enabled bool `json:"enabled"`
+}
+
+type ObservabilityConfigSummary struct {
+	PrometheusEnabled bool `json:"prometheus_enabled"`
+	JaegerEnabled     bool `json:"jaeger_enabled"`
 }

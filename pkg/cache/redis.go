@@ -120,3 +120,21 @@ func ClearRequestCount(ctx context.Context, path string) error {
 	logger.Debug("Request count cleared", zap.String("key", key))
 	return nil
 }
+
+// ClearMethodCount 清除指定方法和路径的请求计数（可选，用于测试或重置）
+func ClearMethodCount(ctx context.Context, method, path string) error {
+	if Client == nil {
+		logger.Warn("Redis client not initialized, skipping request count clear")
+		return fmt.Errorf("redis client not initialized")
+	}
+
+	key := fmt.Sprintf("mg:cache:%s:%s", method, path)
+	err := Client.Del(ctx, key).Err()
+	if err != nil {
+		logger.Error("Failed to clear method count", zap.Error(err), zap.String("key", key))
+		return err
+	}
+
+	logger.Debug("Request method cleared", zap.String("key", key))
+	return nil
+}

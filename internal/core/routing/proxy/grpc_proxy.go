@@ -126,7 +126,7 @@ func SetupGRPCProxy(cfg *config.Config, r gin.IRouter) {
 					break
 				}
 			}
-			health.GetGlobalHealthChecker().UpdateRequestCount(target, recorder.Status < 400)
+			health.GetGlobalHealthChecker().UpdateRequestCount(target, recorder.Status < 400, false)
 
 			// 记录请求延迟
 			duration := time.Since(start).Seconds()
