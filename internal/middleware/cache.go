@@ -5,7 +5,6 @@ import (
 	"context"
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
-	"github.com/penwyp/mini-gateway/internal/core/health"
 	"github.com/penwyp/mini-gateway/pkg/cache"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
@@ -53,8 +52,6 @@ func CacheMiddleware() gin.HandlerFunc {
 		// 如果当前窗口内请求次数未达到阈值，不进行缓存
 		if count < int64(rule.Threshold) {
 			c.Next()
-			// 更新请求计数（非缓存命中）
-			health.GetGlobalHealthChecker().UpdateRequestCount(path, c.Writer.Status() == http.StatusOK, false)
 			return
 		}
 
@@ -69,11 +66,6 @@ func CacheMiddleware() gin.HandlerFunc {
 			if err != nil {
 				logger.Error("Failed to cache response", zap.Error(err))
 			}
-			// 更新请求计数（非缓存命中）
-			health.GetGlobalHealthChecker().UpdateRequestCount(path, true, false)
-		} else {
-			// 请求失败，更新计数
-			health.GetGlobalHealthChecker().UpdateRequestCount(path, false, false)
 		}
 	}
 }

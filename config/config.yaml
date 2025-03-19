@@ -90,7 +90,7 @@ security:
   - 10.2.100.111
   ipupdatemode: override
 cache:
-  addr: 10.2.103.35:8379
+  addr: 127.0.0.1:8379
   password: redis123
   db: 0
 caching:
@@ -106,7 +106,7 @@ caching:
     ttl: 10m0s
 consul:
   enabled: false
-  addr: 10.2.103.35:8300
+  addr: 127.0.0.1:8300
 traffic:
   ratelimit:
     enabled: true
@@ -142,7 +142,7 @@ observability:
     path: /metrics
   jaeger:
     enabled: true
-    endpoint: 10.2.103.35:8331
+    endpoint: 127.0.0.1:8331
     sampler: always
     sampleratio: 1
 plugin:
