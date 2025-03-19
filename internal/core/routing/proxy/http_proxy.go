@@ -263,10 +263,10 @@ func (hp *HTTPProxy) selectTarget(c *gin.Context, rules config.RoutingRules) (st
 	targets := hp.extractTargets(targetRules)
 	defer hp.objectPool.PutTargets(targets)
 
-	if grayscale.WeightedRandom && len(targetRules) > 1 {
+	if grayscale.Enabled && grayscale.WeightedRandom && len(targetRules) > 1 {
 		return hp.selectWithWeightedRandom(targetRules, c.Request.URL.Path)
 	}
-	return hp.selectWithLoadBalancer(c, targets, targetRules[0].Env)
+	return hp.selectWithLoadBalancer(c, targetRules, targetRules[0].Env)
 }
 
 // selectWithWeightedRandom 使用权重随机选择目标
@@ -286,22 +286,11 @@ func (hp *HTTPProxy) selectWithWeightedRandom(rules config.RoutingRules, path st
 }
 
 // selectWithLoadBalancer 使用负载均衡器选择目标
-func (hp *HTTPProxy) selectWithLoadBalancer(c *gin.Context, rulesOrTargets interface{}, envOverride ...string) (string, string) {
+func (hp *HTTPProxy) selectWithLoadBalancer(c *gin.Context, rules config.RoutingRules, envOverride ...string) (string, string) {
 	var targets []string
-	var rules config.RoutingRules
 
-	switch v := rulesOrTargets.(type) {
-	case config.RoutingRules:
-		rules = v
-		targets = hp.extractTargets(rules)
-		defer hp.objectPool.PutTargets(targets)
-	case []string:
-		targets = v
-		cfg := config.GetConfig()
-		rules = hp.filterRules(cfg.Routing.Rules[c.Request.URL.Path], envOverride[0]) // 假设路径存在
-	default:
-		return "", ""
-	}
+	targets = hp.extractTargets(rules)
+	defer hp.objectPool.PutTargets(targets)
 
 	target := hp.loadBalancer.SelectTarget(targets, c.Request)
 	if target == "" {

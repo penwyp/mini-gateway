@@ -34,7 +34,7 @@ func Init(cfg *config.Config) {
 
 // GetCacheKey 生成缓存键，基于 HTTP 方法和路径
 func GetCacheKey(method, path string) string {
-	return fmt.Sprintf("cache:%s:%s", method, path)
+	return fmt.Sprintf("mg:cache:%s:%s", method, path)
 }
 
 // CheckCache 检查缓存是否存在并返回内容
@@ -76,18 +76,27 @@ func SetCache(ctx context.Context, method, path, content string, ttl time.Durati
 	return nil
 }
 
-// IncrementRequestCount 增加指定路径的请求计数，返回当前计数
-func IncrementRequestCount(ctx context.Context, path string) int64 {
+// IncrementRequestCount 增加指定路径的请求计数，返回当前计数。
+// 当计数器为新建时，设置过期时间为当前TTL窗口长度。
+func IncrementRequestCount(ctx context.Context, path string, ttl time.Duration) int64 {
 	if Client == nil {
 		logger.Warn("Redis client not initialized, skipping request count increment")
 		return 0
 	}
 
-	key := fmt.Sprintf("req_count:%s", path)
+	key := fmt.Sprintf("mg:cache:req_count:%s", path)
 	count, err := Client.Incr(ctx, key).Result()
 	if err != nil {
 		logger.Error("Failed to increment request count", zap.Error(err), zap.String("key", key))
 		return 0
+	}
+
+	// 如果是新的计数，设置过期时间
+	if count == 1 {
+		err := Client.Expire(ctx, key, ttl).Err()
+		if err != nil {
+			logger.Error("Failed to set TTL for request count", zap.Error(err), zap.String("key", key), zap.Duration("ttl", ttl))
+		}
 	}
 
 	logger.Debug("Request count incremented", zap.String("key", key), zap.Int64("count", count))
@@ -101,7 +110,7 @@ func ClearRequestCount(ctx context.Context, path string) error {
 		return fmt.Errorf("redis client not initialized")
 	}
 
-	key := fmt.Sprintf("req_count:%s", path)
+	key := fmt.Sprintf("mg:cache:req_count:%s", path)
 	err := Client.Del(ctx, key).Err()
 	if err != nil {
 		logger.Error("Failed to clear request count", zap.Error(err), zap.String("key", key))

@@ -135,6 +135,12 @@ manage-test-status:
 	@echo "Checking test services status via script..."
 	@./test/manage_test_services.sh status
 
+.PHONY: manage-test-health
+manage-test-health:
+	chmod +x ./test/manage_test_services.sh
+	@echo "Checking test services health via script..."
+	@./test/manage_test_services.sh health
+
 .PHONY: setup-consul
 setup-consul:
 	@echo "Checking if Consul is installed..."

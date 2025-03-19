@@ -137,6 +137,17 @@ func (s *Server) handleHealth(c *gin.Context) {
 func (s *Server) handleStatus(c *gin.Context) {
 	logger.Info("收到状态检查请求", zap.String("clientIP", c.ClientIP()))
 
+	var statusReq struct {
+		Reset bool `json:"reset" form:"reset"`
+	}
+	if err := c.ShouldBindQuery(&statusReq); err != nil {
+		c.JSON(400, gin.H{"error": "Invalid request payload"})
+		return
+	}
+	if statusReq.Reset {
+		health.GetGlobalHealthChecker().ResetAllStats()
+	}
+
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	gatewayStatus := GatewayStatus{
@@ -300,9 +311,7 @@ func (s *Server) handleSaveConfig(c *gin.Context) {
 func (s *Server) setupMiddleware(cfg *config.Config) {
 	s.Router = setupGinRouter(cfg)
 
-	if cfg.Caching.Enabled {
-		s.Router.Use(middleware.CacheMiddleware(cfg)) // 启用缓存中间件
-	}
+	s.Router.Use(middleware.CacheMiddleware()) // 启用缓存中间件
 
 	plugins.LoadPlugins(s.Router, cfg) // 加载自定义插件
 

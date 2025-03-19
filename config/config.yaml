@@ -65,11 +65,11 @@ routing:
       protocol: websocket
       healthcheckpath: /health
   engine: trie
-  loadbalancer: weighted_round_robin
+  loadbalancer: round_robin
   heartbeatinterval: 30
   grayscale:
     enabled: true
-    weightedrandom: true
+    weightedrandom: false
     defaultenv: stable
     canaryenv: canary
 security:

@@ -1,8 +1,4 @@
-好的，我会为您的 README.md 补充并丰富以下几个功能模块的测试方法：**安全（security）**、**路由（routing）**、**可观测性（observability）** 和 **负载均衡（loadbalancer）**。这些测试方法将基于您的设计文档和代码实现，尽可能贴近实际功能，提供详细的测试命令、预期行为和验证方式。以下是更新后的 README.md：
-
----
-
-# 高性能 API 网关中间件测试文档
+# 高性能 API 网关中间件文档
 
 **版本**: 0.1.0  
 **更新日期**: 2025年3月17日  
@@ -53,6 +49,24 @@
 - 服务已运行：`make run`
 - 默认监听地址：`http://127.0.0.1:8380`
 - 如果启用了认证（`cfg.Middleware.Auth` 为 `true`），需要先获取 JWT 或 RBAC token。
+
+#### 环境准备
+ - 启动GRPC测试服务
+ - 启动HTTP测试服务
+ - 启动WEBSOCKET测试服务
+```bash
+# 通过执行脚本，唤起三个服务
+make manage-test-start 
+```
+ - 检查测试服务是否正常启动/运行
+```bash
+make manage-test-status
+make manage-test-health
+```
+ - 停止测试服务
+```bash
+make manage-test-stop
+```
 
 ---
 
@@ -174,7 +188,7 @@ gateway_requests_total{method="POST",path="/login",status="200"} 2
 # 成功场景：添加新路由
 curl -X POST http://127.0.0.1:8380/api/routes/add \
 -H "Content-Type: application/json" \
--d '{"path": "/api/test", "rules": [{"target": "http://127.0.0.1:8080", "weight": 100, "protocol": "http"}]}'
+-d '{"path": "/api/test", "rules": [{"target": "http://127.0.0.1:8380", "weight": 100, "protocol": "http"}]}'
 ```
 **预期输出**：
 ```json
@@ -185,7 +199,7 @@ curl -X POST http://127.0.0.1:8380/api/routes/add \
 # 失败场景：路径已存在
 curl -X POST http://127.0.0.1:8380/api/routes/add \
 -H "Content-Type: application/json" \
--d '{"path": "/api/test", "rules": [{"target": "http://127.0.0.1:8080", "weight": 100, "protocol": "http"}]}'
+-d '{"path": "/api/test", "rules": [{"target": "http://127.0.0.1:8380", "weight": 100, "protocol": "http"}]}'
 ```
 **预期输出**：
 ```json
@@ -250,7 +264,7 @@ curl -X PUT http://127.0.0.1:8380/api/routes/update \
 # 成功场景：删除现有路由
 curl -X DELETE http://127.0.0.1:8380/api/routes/delete \
 -H "Content-Type: application/json" \
--d '{"path": "/api/test", "rules": [{"target": "http://127.0.0.1:8080", "weight": 100, "protocol": "http"}]}'
+-d '{"path": "/api/test", "rules": [{"target": "http://127.0.0.1:8380", "weight": 100, "protocol": "http"}]}'
 ```
 **预期输出**：
 ```json
@@ -261,7 +275,7 @@ curl -X DELETE http://127.0.0.1:8380/api/routes/delete \
 # 失败场景：路径不存在
 curl -X DELETE http://127.0.0.1:8380/api/routes/delete \
 -H "Content-Type: application/json" \
--d '{"path": "/api/nonexistent", "rules": [{"target": "http://127.0.0.1:8080", "weight": 100, "protocol": "http"}]}'
+-d '{"path": "/api/nonexistent", "rules": [{"target": "http://127.0.0.1:8380", "weight": 100, "protocol": "http"}]}'
 ```
 **预期输出**：
 ```json
@@ -350,7 +364,7 @@ curl -X GET http://127.0.0.1:8380/api/v1/user
    示例：
    ```bash
    TOKEN=$(curl -s -X POST http://127.0.0.1:8380/login -H "Content-Type: application/json" -d '{"username": "admin", "password": "password"}' | jq -r '.token')
-   curl -X POST http://127.0.0.1:8380/api/routes/add -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"path": "/api/test", "rules": [{"target": "http://127.0.0.1:8080"}]}'
+   curl -X POST http://127.0.0.1:8380/api/routes/add -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"path": "/api/test", "rules": [{"target": "http://127.0.0.1:8380"}]}'
    ```
 3. **后端服务**：测试动态路由时，确保目标服务（如 `http://127.0.0.1:8381`）已运行。
 
@@ -363,7 +377,7 @@ curl -X GET http://127.0.0.1:8380/api/v1/user
 #### 2.1 限流（Traffic）
 ##### 测试命令
 ```bash
-wrk -t10 -c100 -d30s http://127.0.0.1:8380/health
+wrk -t10 -c100 -d5s http://127.0.0.1:8380/health
 ```
 **预期行为**：根据配置中的 QPS 和 burst 参数限制请求速率。可以通过切换 `algorithm` 值（`token_bucket` 或 `leaky_bucket`）测试不同算法的效果。
 
@@ -377,18 +391,18 @@ wrk -t10 -c100 -d30s http://127.0.0.1:8380/health
 1. **手动测试**：
     - 不带 Header：
       ```bash
-      curl http://127.0.0.1:8080/api/v1/user
+      curl http://127.0.0.1:8380/api/v1/user
       ```
         - **预期**：80% 概率路由到 `stable`，20% 到 `canary`。
     - 带 Header：
       ```bash
-      curl -H "X-Env: canary" http://127.0.0.1:8080/api/v1/user
+      curl -H "X-Env: canary" http://127.0.0.1:8380/api/v1/user
       ```
         - **预期**：100% 路由到 `canary`。
 
 2. **压力测试**：
    ```bash
-   wrk -t10 -c100 -d10s http://127.0.0.1:8080/api/v1/user
+   wrk -t10 -c100 -d5s http://127.0.0.1:8380/api/v1/user
    ```
     - **验证**：检查日志，确认流量分配比例接近 80:20。
 
@@ -475,7 +489,7 @@ wrk -t10 -c100 -d30s http://127.0.0.1:8380/health
 2. **路由管理**：
     - 添加路由（见 1.5.1）：
       ```bash
-      curl -X POST http://127.0.0.1:8380/api/routes/add -H "Content-Type: application/json" -d '{"path": "/api/new", "rules": [{"target": "http://127.0.0.1:8080"}]}'
+      curl -X POST http://127.0.0.1:8380/api/routes/add -H "Content-Type: application/json" -d '{"path": "/api/new", "rules": [{"target": "http://127.0.0.1:8380"}]}'
       ```
         - **预期**：新路由生效。
     - 更新路由（见 1.5.2）：
@@ -528,7 +542,7 @@ wrk -t10 -c100 -d30s http://127.0.0.1:8380/health
 
 3. **压力测试**：
    ```bash
-   wrk -t10 -c100 -d10s http://127.0.0.1:8380/health
+   wrk -t10 -c100 -d5s http://127.0.0.1:8380/health
    ```
     - **验证**：Prometheus 指标更新，Jaeger 记录完整请求链。
 
@@ -549,7 +563,7 @@ wrk -t10 -c100 -d30s http://127.0.0.1:8380/health
 2. **加权轮询（Weighted Round Robin）**：
     - 配置 `cfg.Routing.LoadBalancer = "weighted_round_robin"`（权重 80:20）：
       ```bash
-      wrk -t10 -c100 -d10s http://127.0.0.1:8380/api/v1/user
+      wrk -t10 -c100 -d5s http://127.0.0.1:8380/api/v1/user
       ```
         - **预期**：流量按权重分配（约 80% 到 `8381`，20% 到 `8383`）。
 

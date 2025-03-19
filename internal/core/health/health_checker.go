@@ -326,6 +326,23 @@ func (h *HealthChecker) UpdateRequestCount(target string, success bool) {
 	}
 }
 
+// ResetAllStats 重置所有后端目标的状态信息
+func (h *HealthChecker) ResetAllStats() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for _, stat := range h.targetStats {
+		stat.RequestCount = 0
+		stat.SuccessCount = 0
+		stat.FailureCount = 0
+		stat.ProbeRequestCount = 0
+		stat.ProbeSuccessCount = 0
+		stat.ProbeFailureCount = 0
+		stat.LastProbeTime = time.Time{}
+	}
+	logger.Info("All target stats reset")
+}
+
 // GetAllStats 获取所有后端目标的状态信息
 func (h *HealthChecker) GetAllStats() []TargetStatus {
 	h.mu.RLock()
