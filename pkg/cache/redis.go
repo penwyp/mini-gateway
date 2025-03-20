@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/penwyp/mini-gateway/config"
@@ -84,7 +85,7 @@ func IncrementRequestCount(ctx context.Context, path string, ttl time.Duration) 
 		return 0
 	}
 
-	key := fmt.Sprintf("mg:cache:req_count:%s", path)
+	key := GetPathReqCountKey(path)
 	count, err := Client.Incr(ctx, key).Result()
 	if err != nil {
 		logger.Error("Failed to increment request count", zap.Error(err), zap.String("key", key))
@@ -103,6 +104,10 @@ func IncrementRequestCount(ctx context.Context, path string, ttl time.Duration) 
 	return count
 }
 
+func GetPathReqCountKey(path string) string {
+	return fmt.Sprintf("mg:cache:req_count:%s", path)
+}
+
 // ClearRequestCount 清除指定路径的请求计数（可选，用于测试或重置）
 func ClearRequestCount(ctx context.Context, path string) error {
 	if Client == nil {
@@ -110,7 +115,7 @@ func ClearRequestCount(ctx context.Context, path string) error {
 		return fmt.Errorf("redis client not initialized")
 	}
 
-	key := fmt.Sprintf("mg:cache:req_count:%s", path)
+	key := GetPathReqCountKey(path)
 	err := Client.Del(ctx, key).Err()
 	if err != nil {
 		logger.Error("Failed to clear request count", zap.Error(err), zap.String("key", key))
@@ -119,6 +124,62 @@ func ClearRequestCount(ctx context.Context, path string) error {
 
 	logger.Debug("Request count cleared", zap.String("key", key))
 	return nil
+}
+
+type PathCount struct {
+	Path  string `json:"path"`
+	Count uint64 `json:"count"`
+}
+
+// BatchGetPathReqCount 批量获取多个路径的请求计数
+func BatchGetPathReqCount(ctx context.Context, paths []string) ([]PathCount, error) {
+	if Client == nil {
+		logger.Warn("Redis client not initialized, skipping batch request count retrieval")
+		return nil, fmt.Errorf("redis client not initialized")
+	}
+
+	keys := make([]string, len(paths))
+	for i, path := range paths {
+		keys[i] = GetPathReqCountKey(path)
+	}
+
+	counts, err := Client.MGet(ctx, keys...).Result()
+	if err != nil {
+		logger.Error("Failed to batch get request counts", zap.Error(err))
+		return nil, err
+	}
+
+	results := make([]PathCount, len(paths))
+	for i, count := range counts {
+		// 初始化 PathCount 结构体
+		results[i] = PathCount{
+			Path: paths[i], // 假设 PathCount 结构体有 Path 字段
+		}
+
+		// 处理 Redis 返回的计数结果
+		if count == nil { // key 不存在时返回 0
+			results[i].Count = 0
+		} else {
+			// 将 interface{} 类型转换为字符串，然后转换为整数
+			if countStr, ok := count.(string); ok {
+				if val, err := strconv.ParseUint(countStr, 10, 64); err == nil {
+					results[i].Count = val // 假设 PathCount 结构体有 Count 字段
+				} else {
+					logger.Warn("Failed to parse count value",
+						zap.String("path", paths[i]),
+						zap.String("value", countStr),
+						zap.Error(err))
+					results[i].Count = 0
+				}
+			} else {
+				logger.Warn("Unexpected count type",
+					zap.String("path", paths[i]),
+					zap.Any("value", count))
+				results[i].Count = 0
+			}
+		}
+	}
+	return results, nil
 }
 
 // ClearMethodCount 清除指定方法和路径的请求计数（可选，用于测试或重置）

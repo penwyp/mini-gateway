@@ -1,9 +1,10 @@
 package traffic
 
 import (
-	"github.com/penwyp/mini-gateway/pkg/logger"
 	"testing"
 	"time"
+
+	"github.com/penwyp/mini-gateway/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"

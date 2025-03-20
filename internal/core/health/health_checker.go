@@ -311,7 +311,7 @@ func (h *HealthChecker) checkWebSocket(target, healthPath string, stat *TargetSt
 }
 
 // UpdateRequestCount 更新业务请求计数
-func (h *HealthChecker) UpdateRequestCount(target string, success bool, cacheHit bool) {
+func (h *HealthChecker) UpdateRequestCount(target string, success bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	host, _ := normalizeTargetHost(target)
@@ -319,9 +319,6 @@ func (h *HealthChecker) UpdateRequestCount(target string, success bool, cacheHit
 		stat.RequestCount++
 		if success {
 			stat.SuccessCount++
-			if cacheHit {
-				stat.CacheHitCount++ // 缓存命中时增加计数
-			}
 		} else {
 			stat.FailureCount++
 		}

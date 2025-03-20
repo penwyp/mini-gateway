@@ -3,12 +3,13 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/pkg/cache"
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
-	"net/http"
 )
 
 func CacheMiddleware() gin.HandlerFunc {
@@ -45,6 +46,7 @@ func CacheMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// TODO 这里事务性有问题
 		// 使用传入TTL更新请求计数，统计在当前窗口内的请求数
 		count := cache.IncrementRequestCount(c.Request.Context(), path, rule.TTL)
 		logger.Debug("Request count", zap.String("path", path), zap.Int64("count", count))

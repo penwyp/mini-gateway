@@ -137,12 +137,16 @@ traffic:
     windowsize: 100
     windowduration: 10
 observability:
+  grafana:
+    httpEndpoint: 127.0.0.1:8350/dashboards
   prometheus:
     enabled: true
     path: /metrics
+    httpEndpoint: 127.0.0.1:8390
   jaeger:
     enabled: true
     endpoint: 127.0.0.1:8331
+    httpEndpoint: 127.0.0.1:8330
     sampler: always
     sampleratio: 1
 plugin:

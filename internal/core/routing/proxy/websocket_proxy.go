@@ -121,7 +121,7 @@ func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgr
 		// 验证目标是否为有效的 WebSocket URL
 		targetURL, err := url.Parse(target)
 		if err != nil || (targetURL.Scheme != "ws" && targetURL.Scheme != "wss") {
-			health.GetGlobalHealthChecker().UpdateRequestCount(target, false, false)
+			health.GetGlobalHealthChecker().UpdateRequestCount(target, false)
 			connectSpan.RecordError(err)
 			connectSpan.SetStatus(codes.Error, "Invalid backend URL")
 			logger.Error("Invalid WebSocket target URL detected",
@@ -158,7 +158,7 @@ func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgr
 		// 从连接池获取或创建后端 WebSocket 连接
 		backendConn, err := wp.pool.GetConn(fullTarget)
 		if err != nil {
-			health.GetGlobalHealthChecker().UpdateRequestCount(target, false, false)
+			health.GetGlobalHealthChecker().UpdateRequestCount(target, false)
 			connectSpan.RecordError(err)
 			connectSpan.SetStatus(codes.Error, "Failed to connect to backend")
 			logger.Error("Failed to establish backend WebSocket connection",
@@ -174,7 +174,7 @@ func (wp *WebSocketProxy) createWebSocketHandler(rules config.RoutingRules, upgr
 		go wp.forwardMessages(ctx, backendConn, clientConn, "backend-to-client", errCh)
 
 		if err := <-errCh; err != nil {
-			health.GetGlobalHealthChecker().UpdateRequestCount(target, false, false)
+			health.GetGlobalHealthChecker().UpdateRequestCount(target, false)
 			connectSpan.RecordError(err)
 			connectSpan.SetStatus(codes.Error, "Message forwarding failed")
 			logger.Error("WebSocket message forwarding failed",
@@ -207,7 +207,7 @@ func (wp *WebSocketProxy) forwardMessages(ctx context.Context, from, to *websock
 			return
 		}
 		span.SetStatus(codes.Ok, "Message forwarded successfully")
-		health.GetGlobalHealthChecker().UpdateRequestCount(to.LocalAddr().String(), true, false)
+		health.GetGlobalHealthChecker().UpdateRequestCount(to.LocalAddr().String(), true)
 		span.End()
 	}
 }

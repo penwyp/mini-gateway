@@ -158,6 +158,7 @@ func (s *Server) handleStatus(c *gin.Context) {
 	}
 
 	backendStats := health.GetGlobalHealthChecker().GetAllStats()
+	cachedStats := s.getCachedPathStats()
 	lbStatus := s.getLoadBalancerStatus()
 	pluginStatus := getPluginStatus()
 
@@ -204,13 +205,17 @@ func (s *Server) handleStatus(c *gin.Context) {
 		},
 		Observability: ObservabilityConfigSummary{
 			PrometheusEnabled: cfg.Observability.Prometheus.Enabled,
+			PrometheusAddr:    cfg.Observability.Prometheus.HttpEndpoint,
+			GrafanaAddr:       cfg.Observability.Grafana.HttpEndpoint,
 			JaegerEnabled:     cfg.Observability.Jaeger.Enabled,
+			JaegerAddr:        cfg.Observability.Jaeger.HttpEndpoint,
 		},
 	}
 
 	c.HTML(200, "status.html", gin.H{
 		"Gateway":       gatewayStatus,
 		"BackendStats":  backendStats,
+		"CachedStats":   cachedStats,
 		"LoadBalancer":  lbStatus,
 		"Plugins":       pluginStatus,
 		"ConfigSummary": configSummary,
@@ -519,6 +524,26 @@ func (s *Server) getUnhealthyTargets() []string {
 	return unhealthy
 }
 
+func (s *Server) getCachedPathStats() []cache.PathCount {
+
+	var paths []string
+	for path := range config.GetConfig().Routing.Rules {
+		paths = append(paths, path)
+	}
+
+	pathCounts, getErr := cache.BatchGetPathReqCount(context.Background(), paths)
+	if getErr != nil {
+		logger.Error("获取缓存路径统计失败", zap.Error(getErr))
+		return nil
+	}
+
+	sort.Slice(pathCounts, func(i, j int) bool {
+		return pathCounts[i].Path < pathCounts[j].Path
+	})
+
+	return pathCounts
+}
+
 // PluginStatus 插件状态
 type PluginStatus struct {
 	Name        string `json:"name"`
@@ -623,6 +648,9 @@ type TrafficBreakerSummary struct {
 }
 
 type ObservabilityConfigSummary struct {
-	PrometheusEnabled bool `json:"prometheus_enabled"`
-	JaegerEnabled     bool `json:"jaeger_enabled"`
+	PrometheusEnabled bool   `json:"prometheus_enabled"`
+	PrometheusAddr    string `json:"prometheus_addr"`
+	GrafanaAddr       string `json:"grafana_addr"`
+	JaegerEnabled     bool   `json:"jaeger_enabled"`
+	JaegerAddr        string `json:"jaeger_addr"`
 }

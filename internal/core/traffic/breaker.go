@@ -178,7 +178,7 @@ func Breaker() gin.HandlerFunc {
 
 		// 在滑动窗口中记录请求统计
 		latency := time.Since(start)
-		success := err == nil && c.Writer.Status() < 400
+		success := err == nil && c.Writer.Status() < http.StatusBadRequest
 		window.Update(RequestStat{
 			Success:   success,
 			Latency:   latency,

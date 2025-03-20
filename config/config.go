@@ -2,12 +2,13 @@ package config
 
 import (
 	"fmt"
-	"gopkg.in/yaml.v2"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v2"
 
 	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
@@ -354,22 +355,30 @@ type Traffic struct {
 
 // Observability 可观测性配置
 type Observability struct {
-	Prometheus Prometheus   `mapstructure:"prometheus"`
-	Jaeger     JaegerConfig `mapstructure:"jaeger"`
+	Prometheus Prometheus `mapstructure:"prometheus"`
+	Grafana    Grafana    `mapstructure:"grafana"`
+	Jaeger     Jaeger     `mapstructure:"jaeger"`
 }
 
-// Prometheus Prometheus 配置
+// Grafana 配置
+type Grafana struct {
+	HttpEndpoint string `mapstructure:"httpEndpoint"`
+}
+
+// Prometheus 配置
 type Prometheus struct {
-	Enabled bool   `mapstructure:"enabled"`
-	Path    string `mapstructure:"path"`
+	Enabled      bool   `mapstructure:"enabled"`
+	Path         string `mapstructure:"path"`
+	HttpEndpoint string `mapstructure:"httpEndpoint"`
 }
 
-// JaegerConfig Jaeger 追踪配置
-type JaegerConfig struct {
-	Enabled     bool    `mapstructure:"enabled"`
-	Endpoint    string  `mapstructure:"endpoint"`
-	Sampler     string  `mapstructure:"sampler"`
-	SampleRatio float64 `mapstructure:"sampleRatio"`
+// Jaeger 追踪配置
+type Jaeger struct {
+	Enabled      bool    `mapstructure:"enabled"`
+	Endpoint     string  `mapstructure:"endpoint"`
+	HttpEndpoint string  `mapstructure:"httpEndpoint"`
+	Sampler      string  `mapstructure:"sampler"`
+	SampleRatio  float64 `mapstructure:"sampleRatio"`
 }
 
 // Logger 日志配置

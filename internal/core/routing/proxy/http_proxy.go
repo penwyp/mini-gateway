@@ -157,7 +157,7 @@ func (hp *HTTPProxy) proxyDirect(c *gin.Context, target, env string) {
 	wrappedWriter := &closeNotifyResponseWriter{c.Writer}
 	proxy.ServeHTTP(wrappedWriter, c.Request)
 	span.SetStatus(codes.Ok, "HTTP proxy completed successfully")
-	health.GetGlobalHealthChecker().UpdateRequestCount(target, true, false)
+	health.GetGlobalHealthChecker().UpdateRequestCount(target, true)
 }
 
 // proxyWithPool 使用连接池代理转发请求
@@ -187,7 +187,7 @@ func (hp *HTTPProxy) proxyWithPool(c *gin.Context, target, env string) {
 
 	hp.writeFastHTTPResponse(c, resp)
 	span.SetStatus(codes.Ok, "HTTP proxy completed successfully")
-	health.GetGlobalHealthChecker().UpdateRequestCount(target, true, false)
+	health.GetGlobalHealthChecker().UpdateRequestCount(target, true)
 }
 
 // initializeLoadBalancer 初始化负载均衡器
@@ -340,7 +340,7 @@ func handleNoTarget(c *gin.Context, span trace.Span, path, env string) {
 func handleProxyError(c *gin.Context, span trace.Span, target, msg string, err error) {
 	span.RecordError(err)
 	span.SetStatus(codes.Error, "Proxy error")
-	health.GetGlobalHealthChecker().UpdateRequestCount(target, false, false)
+	health.GetGlobalHealthChecker().UpdateRequestCount(target, false)
 	logger.Error("HTTP proxy request failed",
 		zap.String("target", target),
 		zap.String("message", msg),
@@ -363,7 +363,7 @@ func (hp *HTTPProxy) createErrorHandler(target string, span trace.Span) func(htt
 	return func(w http.ResponseWriter, r *http.Request, err error) {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Proxy error")
-		health.GetGlobalHealthChecker().UpdateRequestCount(target, false, false)
+		health.GetGlobalHealthChecker().UpdateRequestCount(target, false)
 		logger.Error("HTTP proxy request failed",
 			zap.String("path", r.URL.Path),
 			zap.String("target", target),
