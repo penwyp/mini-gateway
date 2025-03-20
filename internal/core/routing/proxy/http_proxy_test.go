@@ -196,9 +196,6 @@ func TestCreateHTTPHandler_CustomInjection(t *testing.T) {
 type dummyLB struct{}
 
 func (d dummyLB) Type() string { return "dummyLB" }
-func (d dummyLB) GetActiveTargets() []string {
-	return []string{"dummy"}
-}
 func (d dummyLB) SelectTarget(targets []string, req *http.Request) string {
 	if len(targets) > 0 {
 		return targets[0]

@@ -2,26 +2,17 @@ package middleware
 
 import (
 	"bytes"
-	"context"
+	"github.com/penwyp/mini-gateway/internal/core/observability"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
-	"github.com/penwyp/mini-gateway/pkg/cache"
+	"github.com/penwyp/mini-gateway/internal/core/health" // 引入 health 包
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"go.uber.org/zap"
 )
 
 func CacheMiddleware() gin.HandlerFunc {
-	if config.GetConfig().Caching.Enabled {
-		ctx := context.Background()
-		for urlKey := range config.GetConfig().Routing.Rules {
-			cache.ClearMethodCount(ctx, "GET", urlKey)
-			cache.ClearMethodCount(ctx, "POST", urlKey)
-			cache.ClearRequestCount(ctx, urlKey)
-		}
-	}
-
 	return func(c *gin.Context) {
 		if !config.GetConfig().Caching.Enabled {
 			c.Next()
@@ -37,34 +28,41 @@ func CacheMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// 检查是否已存在缓存
-		if content, found := cache.CheckCache(c.Request.Context(), method, path); found {
-			// 缓存命中，更新请求计数和缓存命中计数
-			cache.IncrementRequestCount(c.Request.Context(), path, rule.TTL)
+		// 获取目标主机（假设从路由规则中提取第一个目标）
+		target := ""
+		if rules, ok := config.GetConfig().Routing.Rules[path]; ok && len(rules) > 0 {
+			host, err := health.NormalizeTarget(rules[0])
+			if err == nil {
+				target = host
+			}
+		}
+
+		// 增加请求计数并检查阈值
+		count := health.GetGlobalHealthChecker().IncrementRequestCount(c.Request.Context(), path, rule.TTL)
+		logger.Debug("Request count", zap.String("path", path), zap.Int64("count", count))
+
+		// 检查缓存
+		if content, found := health.GetGlobalHealthChecker().CheckCache(c.Request.Context(), method, path, target); found {
+			observability.CacheHits.WithLabelValues(method, path, target).Inc()
 			c.String(http.StatusOK, content)
 			c.Abort()
 			return
 		}
 
-		// TODO 这里事务性有问题
-		// 使用传入TTL更新请求计数，统计在当前窗口内的请求数
-		count := cache.IncrementRequestCount(c.Request.Context(), path, rule.TTL)
-		logger.Debug("Request count", zap.String("path", path), zap.Int64("count", count))
-
-		// 如果当前窗口内请求次数未达到阈值，不进行缓存
 		if count < int64(rule.Threshold) {
 			c.Next()
 			return
 		}
 
-		// 当请求次数达到阈值后，拦截响应进行缓存
+		// 捕获响应并缓存
 		writer := &responseWriter{ResponseWriter: c.Writer}
 		c.Writer = writer
 		c.Next()
 
+		observability.CacheMisses.WithLabelValues(method, path, target).Inc()
 		if c.Writer.Status() == http.StatusOK {
 			content := writer.body.String()
-			err := cache.SetCache(c.Request.Context(), method, path, content, rule.TTL)
+			err := health.GetGlobalHealthChecker().SetCache(c.Request.Context(), method, path, content, rule.TTL)
 			if err != nil {
 				logger.Error("Failed to cache response", zap.Error(err))
 			}

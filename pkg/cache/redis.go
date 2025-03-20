@@ -128,7 +128,7 @@ func ClearRequestCount(ctx context.Context, path string) error {
 
 type PathCount struct {
 	Path  string `json:"path"`
-	Count uint64 `json:"count"`
+	Count int64  `json:"count"`
 }
 
 // BatchGetPathReqCount 批量获取多个路径的请求计数
@@ -162,7 +162,7 @@ func BatchGetPathReqCount(ctx context.Context, paths []string) ([]PathCount, err
 		} else {
 			// 将 interface{} 类型转换为字符串，然后转换为整数
 			if countStr, ok := count.(string); ok {
-				if val, err := strconv.ParseUint(countStr, 10, 64); err == nil {
+				if val, err := strconv.ParseInt(countStr, 10, 64); err == nil {
 					results[i].Count = val // 假设 PathCount 结构体有 Count 字段
 				} else {
 					logger.Warn("Failed to parse count value",

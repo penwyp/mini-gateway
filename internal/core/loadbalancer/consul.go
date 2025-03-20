@@ -48,18 +48,6 @@ func (cb *ConsulBalancer) Type() string {
 	return "consul"
 }
 
-func (cb *ConsulBalancer) GetActiveTargets() []string {
-	cb.mu.RLock()
-	defer cb.mu.RUnlock()
-
-	// 返回当前活跃的目标列表
-	targets := make([]string, 0, len(cb.rules))
-	for _, targetList := range cb.rules {
-		targets = append(targets, targetList...)
-	}
-	return targets
-}
-
 // SelectTarget 根据 Consul 规则或回退逻辑为请求选择目标
 func (cb *ConsulBalancer) SelectTarget(targets []string, req *http.Request) string {
 	cb.mu.RLock()

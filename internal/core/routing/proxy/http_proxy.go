@@ -72,13 +72,6 @@ func (hp *HTTPProxy) GetLoadBalancerType() string {
 	return hp.loadBalancer.Type()
 }
 
-func (hp *HTTPProxy) GetLoadBalancerActiveTargets() []string {
-	if hp == nil || hp.loadBalancer == nil {
-		return nil
-	}
-	return hp.loadBalancer.GetActiveTargets()
-}
-
 // RefreshLoadBalancer 刷新负载均衡器
 func (hp *HTTPProxy) RefreshLoadBalancer(cfg *config.Config) {
 	hp.loadBalancer = initializeLoadBalancer(cfg)

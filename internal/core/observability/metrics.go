@@ -106,12 +106,6 @@ var (
 		[]string{"path", "status"},
 	)
 
-	// MemoryAllocations 跟踪内存分配的总数
-	MemoryAllocations = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "gateway_memory_allocations_total",
-		Help: "Total number of memory allocations",
-	})
-
 	// metricsInitialized 确保指标只初始化一次
 	metricsInitialized bool
 )

@@ -2,7 +2,7 @@
 
 # 定义变量
 GRAFANA_PROVISIONING_DIR="test/docker/grafana/provisioning"
-DASHBOARD_SOURCE="test/docker/prometheus.dashboard.txt"
+DASHBOARD_SOURCE="test/docker/prometheus.dashboard.json"
 DASHBOARD_DEST="test/docker/grafana/dashboards/gateway.json"
 
 # 检查依赖工具
@@ -40,9 +40,7 @@ EOF
 # 检查并复制 Dashboard 文件
 if [ -f "$DASHBOARD_SOURCE" ]; then
     cp "$DASHBOARD_SOURCE" "$DASHBOARD_DEST"
-    # 使用 jq 添加 uid 和确保格式正确
-    jq '.dashboard += {"uid": "gateway-home"}' "$DASHBOARD_DEST" > tmp.json && mv tmp.json "$DASHBOARD_DEST"
-    echo "Dashboard 从 $DASHBOARD_SOURCE 复制到 $DASHBOARD_DEST 并添加 UID"
+    echo "Dashboard 从 $DASHBOARD_SOURCE 复制到 $DASHBOARD_DEST"
 else
     echo "错误：$DASHBOARD_SOURCE 不存在"
     exit 1
@@ -52,7 +50,7 @@ fi
 cat <<EOF > "$GRAFANA_PROVISIONING_DIR/preferences.yml"
 apiVersion: 1
 preferences:
-  homeDashboardUID: "gateway-home"
+  homeDashboardUID: "gateway-monitoring"
 EOF
 
 echo "Grafana 数据源、Dashboard 和首页配置已生成"

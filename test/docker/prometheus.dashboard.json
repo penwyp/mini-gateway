@@ -24,7 +24,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "mini-gateway-Prometheus",
-      "description": "网关每秒处理的请求数 (QPS)，按 HTTP 方法分类",
+      "description": "网关每秒处理的请求数 (QPS)，按方法、路径和状态码分类",
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -62,7 +62,7 @@
         {
           "expr": "rate(gateway_requests_total[5m])",
           "interval": "",
-          "legendFormat": "{{method}}",
+          "legendFormat": "{{method}} - {{path}} - {{status}}",
           "refId": "A"
         }
       ],
@@ -113,7 +113,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "mini-gateway-Prometheus",
-      "description": "请求延迟分布，按路径分类",
+      "description": "请求延迟分布（单位：秒），按方法和路径分类",
       "fill": 0,
       "fillGradient": 0,
       "gridPos": {
@@ -149,15 +149,15 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le, path))",
+          "expr": "histogram_quantile(0.95, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le, method, path))",
           "interval": "",
-          "legendFormat": "{{path}} - 95th",
+          "legendFormat": "{{method}} - {{path}} - 95th",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le, path))",
+          "expr": "histogram_quantile(0.50, sum(rate(gateway_request_duration_seconds_bucket[5m])) by (le, method, path))",
           "interval": "",
-          "legendFormat": "{{path}} - 50th",
+          "legendFormat": "{{method}} - {{path}} - 50th",
           "refId": "B"
         }
       ],
@@ -203,23 +203,44 @@
       }
     },
     {
-      "cacheTimeout": null,
-      "colorBackground": false,
-      "colorValue": false,
-      "colors": [
-        "#299c46",
-        "rgba(237, 129, 40, 0.89)",
-        "#d44a3a"
-      ],
       "datasource": "mini-gateway-Prometheus",
       "description": "当前活跃的 WebSocket 连接数",
-      "format": "none",
-      "gauge": {
-        "maxValue": 100,
-        "minValue": 0,
-        "show": false,
-        "thresholdLabels": false,
-        "thresholdMarkers": true
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3274D9"
+          },
+          "mappings": [
+            {
+              "type": 1,
+              "options": {
+                "null": {
+                  "text": "N/A"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#299c46",
+                "value": null
+              },
+              {
+                "color": "rgba(237, 129, 40, 0.89)",
+                "value": 50
+              },
+              {
+                "color": "#d44a3a",
+                "value": 75
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
       },
       "gridPos": {
         "h": 4,
@@ -228,30 +249,23 @@
         "y": 8
       },
       "id": 3,
-      "interval": null,
-      "links": [],
-      "mappingType": 1,
-      "mappingTypes": [
-        {"name": "value to text", "value": 1},
-        {"name": "range to text", "value": 2}
-      ],
-      "maxDataPoints": 100,
-      "nullPointMode": "connected",
-      "nullText": null,
-      "postfix": "",
-      "postfixFontSize": "50%",
-      "prefix": "",
-      "prefixFontSize": "50%",
-      "rangeMaps": [
-        {"from": "null", "text": "N/A", "to": "null"}
-      ],
-      "sparkline": {
-        "fillColor": "rgba(31, 118, 189, 0.18)",
-        "full": false,
-        "lineColor": "#3274D9",
-        "show": true
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "titleSize": 18,
+          "valueSize": 24
+        },
+        "textMode": "auto"
       },
-      "tableColumn": "",
+      "pluginVersion": "10.0.0",
       "targets": [
         {
           "expr": "gateway_websocket_connections_active",
@@ -260,14 +274,8 @@
           "refId": "A"
         }
       ],
-      "thresholds": "",
       "title": "Active WebSocket Connections",
-      "type": "singlestat",
-      "valueFontSize": "80%",
-      "valueMaps": [
-        {"op": "=", "text": "N/A", "value": "null"}
-      ],
-      "valueName": "current"
+      "type": "stat"
     },
     {
       "aliasColors": {},
@@ -453,7 +461,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "mini-gateway-Prometheus",
-      "description": "JWT 鉴权失败次数，按路径分类",
+      "description": "JWT 认证失败次数，按路径分类",
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -542,7 +550,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "mini-gateway-Prometheus",
-      "description": "因 IP ACL 拒绝的请求数，按路径和 IP 分类",
+      "description": "因 IP 访问控制列表拒绝的请求数，按路径和 IP 分类",
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -716,8 +724,8 @@
     },
     {
       "aliasColors": {
-        "Cache Hits": "#1F78C1",
-        "Cache Misses": "#E02F44"
+        "Hits": "#1F78C1",
+        "Misses": "#E02F44"
       },
       "bars": false,
       "dashLength": 10,
@@ -818,7 +826,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": "mini-gateway-Prometheus",
-      "description": "gRPC 请求总数，按路径和状态码分类",
+      "description": "gRPC 请求总数，按路径和状态分类",
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -900,6 +908,95 @@
         "align": false,
         "alignLevel": null
       }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "mini-gateway-Prometheus",
+      "description": "内存分配总数",
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "id": 11,
+      "legend": {
+        "avg": true,
+        "current": true,
+        "max": true,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": true
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "8.3.3",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "rate(gateway_memory_allocations_total[5m])",
+          "interval": "",
+          "legendFormat": "Memory Allocations",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Memory Allocations",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "ops",
+          "label": "Allocations/s",
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
     }
   ],
   "refresh": "5s",
@@ -910,7 +1007,7 @@
     "list": []
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {
@@ -920,5 +1017,5 @@
   "timezone": "",
   "title": "API Gateway Monitoring Dashboard",
   "uid": "gateway-monitoring",
-  "version": 1
+  "version": 2
 }

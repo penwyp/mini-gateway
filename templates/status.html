@@ -120,24 +120,6 @@
         </div>
     </div>
 
-    <!-- 负载均衡 -->
-    <div class="card">
-        <div class="card-header" data-bs-toggle="collapse" data-bs-target="#lbCollapse">
-            <h5 class="mb-0">负载均衡</h5>
-        </div>
-        <div id="lbCollapse" class="collapse show">
-            <div class="card-body">
-                <table class="table table-striped">
-                    <tbody>
-                    <tr><th>类型</th><td>{{.LoadBalancer.Type}}</td></tr>
-                    <tr><th>活跃目标数</th><td>{{.LoadBalancer.ActiveTargets}}</td></tr>
-                    <tr><th>不可用目标</th><td>{{range .LoadBalancer.UnhealthyTargets}}<span class="badge badge-danger">{{.}}</span> {{end}}</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
     <!-- 插件 -->
     <div class="card">
         <div class="card-header" data-bs-toggle="collapse" data-bs-target="#pluginsCollapse">

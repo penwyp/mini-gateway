@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/samber/lo"
+
 	"github.com/gin-gonic/gin"
 	"github.com/penwyp/mini-gateway/config"
 	"github.com/penwyp/mini-gateway/internal/core/health"
@@ -158,8 +160,7 @@ func (s *Server) handleStatus(c *gin.Context) {
 	}
 
 	backendStats := health.GetGlobalHealthChecker().GetAllStats()
-	cachedStats := s.getCachedPathStats()
-	lbStatus := s.getLoadBalancerStatus()
+	cachedStats := s.getCachedPathStats(backendStats)
 	pluginStatus := getPluginStatus()
 
 	cfg := s.ConfigMgr.GetConfig()
@@ -216,7 +217,6 @@ func (s *Server) handleStatus(c *gin.Context) {
 		"Gateway":       gatewayStatus,
 		"BackendStats":  backendStats,
 		"CachedStats":   cachedStats,
-		"LoadBalancer":  lbStatus,
 		"Plugins":       pluginStatus,
 		"ConfigSummary": configSummary,
 	})
@@ -467,10 +467,6 @@ func (s *Server) gracefulShutdown() {
 		}
 	}
 	health.GetGlobalHealthChecker().Close()
-	if err := logger.Sync(); err != nil {
-		logger.Error("同步日志失败", zap.Error(err))
-		os.Exit(1)
-	}
 }
 
 // setupGinRouter 初始化 Gin 路由器
@@ -499,19 +495,6 @@ type GatewayStatus struct {
 	GoroutineCount int    `json:"goroutine_count"`
 }
 
-// getLoadBalancerStatus 获取负载均衡状态
-func (s *Server) getLoadBalancerStatus() map[string]any {
-	lbType := s.HTTPProxy.GetLoadBalancerType()
-	activeTargets := s.HTTPProxy.GetLoadBalancerActiveTargets()
-	unhealthyTargets := s.getUnhealthyTargets()
-
-	return map[string]any{
-		"type":              lbType,
-		"active_targets":    len(activeTargets),
-		"unhealthy_targets": unhealthyTargets,
-	}
-}
-
 // getUnhealthyTargets 获取不可用目标列表
 func (s *Server) getUnhealthyTargets() []string {
 	var unhealthy []string
@@ -524,7 +507,7 @@ func (s *Server) getUnhealthyTargets() []string {
 	return unhealthy
 }
 
-func (s *Server) getCachedPathStats() []cache.PathCount {
+func (s *Server) getCachedPathStats(backendStats []health.TargetStatus) []*cache.PathCount {
 
 	var paths []string
 	for path := range config.GetConfig().Routing.Rules {
@@ -537,11 +520,32 @@ func (s *Server) getCachedPathStats() []cache.PathCount {
 		return nil
 	}
 
+	pathCountMap := make(map[string]*cache.PathCount)
+	for idx, pathCount := range pathCounts {
+		pathCountMap[pathCount.Path] = &pathCounts[idx]
+	}
+	for _, backendStat := range backendStats {
+		if _, ok := pathCountMap[backendStat.Rule]; !ok {
+			continue
+		}
+		count := pathCountMap[backendStat.Rule].Count
+		count -= backendStat.RequestCount
+		if count <= 0 {
+			count = 0
+		}
+		pathCountMap[backendStat.Rule].Count = count
+	}
+
 	sort.Slice(pathCounts, func(i, j int) bool {
 		return pathCounts[i].Path < pathCounts[j].Path
 	})
 
-	return pathCounts
+	ps := lo.Values(pathCountMap)
+
+	sort.Slice(ps, func(i, j int) bool {
+		return ps[i].Path < ps[j].Path
+	})
+	return ps
 }
 
 // PluginStatus 插件状态

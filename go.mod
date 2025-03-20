@@ -16,6 +16,7 @@ require (
 	github.com/hashicorp/go-version v1.2.1
 	github.com/prometheus/client_golang v1.11.1
 	github.com/redis/go-redis/v9 v9.7.1
+	github.com/samber/lo v1.49.1
 	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.10.0
 	github.com/valyala/fasthttp v1.59.0

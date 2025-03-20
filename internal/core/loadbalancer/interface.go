@@ -6,5 +6,4 @@ import "net/http"
 type LoadBalancer interface {
 	SelectTarget(targets []string, r *http.Request) string
 	Type() string
-	GetActiveTargets() []string
 }

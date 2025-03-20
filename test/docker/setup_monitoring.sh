@@ -23,4 +23,4 @@ curl -s "$GRAFANA_URL/api/health" >/dev/null || { echo "Grafana 未启动"; exit
 curl -s "$GRAFANA_URL/api/datasources" -u admin:admin123 | grep -q "mini-gateway-Prometheus" && echo "数据源已加载" || echo "数据源加载失败"
 curl -s "$GRAFANA_URL/api/dashboards/uid/gateway-monitoring" -u admin:admin123 | grep -q "gateway-monitoring" && echo "Dashboard 已加载" || echo "Dashboard 加载失败"
 
-echo "监控服务初始化完成，请访问 $GRAFANA_URL 查看 Dashboard"
+echo "监控服务初始化完成，请访问 $GRAFANA_URL 查看 Dashboard，测试帐号密码为 admin/admin123"

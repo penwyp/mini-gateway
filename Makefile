@@ -17,11 +17,6 @@ GOLINT = golangci-lint
 DOCKER = docker
 WRK = wrk
 
-# 监控相关
-GRAFANA_PROVISIONING_DIR = test/docker/grafana/provisioning
-DASHBOARD_SOURCE = test/docker/prometheus.dashboard.txt
-DASHBOARD_DEST = test/docker/grafana/dashboards/gateway.json
-
 # 默认目标
 .PHONY: all
 all: build
@@ -190,11 +185,13 @@ proto: prepare-proto
 .PHONY: setup-grafana
 setup-grafana:
 	chmod +x test/docker/setup_grafana.sh
+	chmod +x test/docker/setup_monitoring.sh
 	@./test/docker/setup_grafana.sh
 
 # 启动监控服务
 .PHONY: setup-monitoring
 setup-monitoring:
+	chmod +x test/docker/setup_grafana.sh
 	chmod +x test/docker/setup_monitoring.sh
 	@./test/docker/setup_monitoring.sh
 

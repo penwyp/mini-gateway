@@ -65,7 +65,7 @@ routing:
       protocol: websocket
       healthcheckpath: /health
   engine: trie
-  loadbalancer: round_robin
+  loadbalancer: weighted_round_robin
   heartbeatinterval: 30
   grayscale:
     enabled: true

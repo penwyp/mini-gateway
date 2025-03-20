@@ -2,14 +2,19 @@ package health
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"net/url"
 
 	"github.com/gorilla/websocket"
 	"github.com/penwyp/mini-gateway/config"
+	"github.com/penwyp/mini-gateway/pkg/cache" // 引入 Redis 包
 	"github.com/penwyp/mini-gateway/pkg/logger"
 	"github.com/valyala/fasthttp"
 	"go.uber.org/zap"
@@ -19,27 +24,49 @@ import (
 
 // TargetStatus 后端目标的状态信息
 type TargetStatus struct {
-	Rule              string    `json:"rule"`                // 规则名称
-	URL               string    `json:"url"`                 // 目标地址
-	Protocol          string    `json:"protocol"`            // 协议类型
-	RequestCount      int64     `json:"request_count"`       // 业务请求总数
-	SuccessCount      int64     `json:"success_count"`       // 业务成功次数
-	CacheHitCount     int64     `json:"cache_hit_count"`     // 缓存命中次数
-	FailureCount      int64     `json:"failure_count"`       // 业务失败次数
-	ProbeRequestCount int64     `json:"probe_request_count"` // 探活请求总数
-	ProbeSuccessCount int64     `json:"probe_success_count"` // 探活成功次数
-	ProbeFailureCount int64     `json:"probe_failure_count"` // 探活失败次数
-	LastProbeTime     time.Time `json:"last_probe_time"`     // 最后一次探活时间
-	LastRequestTime   time.Time `json:"last_request_time"`   // 最后一次业务请求时间
+	Rule              string    `json:"rule"`
+	URL               string    `json:"url"`
+	Protocol          string    `json:"protocol"`
+	RequestCount      int64     `json:"request_count"`
+	SuccessCount      int64     `json:"success_count"`
+	CacheHitCount     int64     `json:"cache_hit_count"`
+	FailureCount      int64     `json:"failure_count"`
+	ProbeRequestCount int64     `json:"probe_request_count"`
+	ProbeSuccessCount int64     `json:"probe_success_count"`
+	ProbeFailureCount int64     `json:"probe_failure_count"`
+	LastProbeTime     time.Time `json:"last_probe_time"`
+	LastRequestTime   time.Time `json:"last_request_time"`
 }
 
 // HealthChecker 健康检查服务
 type HealthChecker struct {
-	targetStats map[string]*TargetStatus // 目标地址到状态信息的映射
-	healthPaths map[string]string        // 目标地址到健康检查路径的映射
-	mu          sync.RWMutex             // 读写锁
-	cfg         *config.Config           // 配置
-	cleanupCh   chan struct{}            // 清理信号通道
+	healthPaths map[string]string
+	mu          sync.RWMutex
+	cfg         *config.Config
+	cleanupCh   chan struct{}
+	ctx         context.Context
+}
+
+// Redis key 前缀
+const (
+	healthStatsPrefix = "mg:health:stats:"    // 健康检查状态
+	cachePrefix       = "mg:cache:"           // 缓存内容
+	reqCountPrefix    = "mg:cache:req_count:" // 请求计数
+)
+
+// GetHealthStatsKey 生成目标的健康状态 Redis 键
+func GetHealthStatsKey(target string) string {
+	return healthStatsPrefix + target
+}
+
+// GetCacheKey 生成缓存内容的 Redis 键
+func GetCacheKey(method, path string) string {
+	return cachePrefix + method + ":" + path
+}
+
+// GetPathReqCountKey 生成路径请求计数的 Redis 键
+func GetPathReqCountKey(path string) string {
+	return reqCountPrefix + path
 }
 
 var (
@@ -56,12 +83,21 @@ func GetGlobalHealthChecker() *HealthChecker {
 func InitHealthChecker(cfg *config.Config) *HealthChecker {
 	logger.Info("Initializing health checker service")
 	checker := &HealthChecker{
-		targetStats: make(map[string]*TargetStatus),
 		healthPaths: make(map[string]string),
 		cfg:         cfg,
 		cleanupCh:   make(chan struct{}),
+		ctx:         context.Background(),
 	}
-	checker.RefreshTargets(cfg) // 初始化时刷新目标
+
+	// 清空 Redis 中所有健康检查和缓存相关键
+	err := checker.clearRedisKeys()
+	if err != nil {
+		logger.Error("Failed to clear Redis keys", zap.Error(err))
+	} else {
+		logger.Info("Cleared all existing health stats and cache keys from Redis")
+	}
+
+	checker.RefreshTargets(cfg)
 	go checker.startHeartbeat()
 
 	once.Do(func() {
@@ -70,24 +106,43 @@ func InitHealthChecker(cfg *config.Config) *HealthChecker {
 	return checker
 }
 
-// RefreshTargets 刷新目标状态和健康检查路径
+// clearRedisKeys 清空 Redis 中所有相关键
+func (h *HealthChecker) clearRedisKeys() error {
+	patterns := []string{
+		healthStatsPrefix + "*",
+		cachePrefix + "*",
+		reqCountPrefix + "*",
+	}
+	for _, pattern := range patterns {
+		keys, err := cache.Client.Keys(h.ctx, pattern).Result()
+		if err != nil {
+			return err
+		}
+		if len(keys) > 0 {
+			pipe := cache.Client.Pipeline()
+			for _, key := range keys {
+				pipe.Del(h.ctx, key)
+			}
+			_, err = pipe.Exec(h.ctx)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// RefreshTargets 刷新目标健康检查路径并初始化 Redis 数据
 func (h *HealthChecker) RefreshTargets(cfg *config.Config) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// 更新配置
 	h.cfg = cfg
-
-	// 保存旧的状态，以便迁移统计数据（可选）
-	oldStats := h.targetStats
-
-	// 重置目标和健康检查路径
-	h.targetStats = make(map[string]*TargetStatus)
 	h.healthPaths = make(map[string]string)
 
 	for ruleName, rules := range cfg.Routing.Rules {
 		for _, rule := range rules {
-			host, err := normalizeTarget(rule)
+			host, err := NormalizeTarget(rule)
 			if err != nil {
 				logger.Error("Invalid target address",
 					zap.String("target", rule.Target),
@@ -95,31 +150,30 @@ func (h *HealthChecker) RefreshTargets(cfg *config.Config) {
 				continue
 			}
 
-			// 设置健康检查路径
 			if rule.HealthCheckPath != "" {
 				h.healthPaths[host] = rule.HealthCheckPath
 			} else {
 				h.healthPaths[host] = "/health"
 			}
 
-			// 初始化或迁移目标状态
-			if oldStat, ok := oldStats[host]; ok {
-				// 迁移旧统计数据
-				h.targetStats[host] = oldStat
+			stat := TargetStatus{
+				Rule:              ruleName,
+				URL:               rule.Target,
+				Protocol:          rule.Protocol,
+				RequestCount:      0,
+				SuccessCount:      0,
+				FailureCount:      0,
+				ProbeRequestCount: 0,
+				ProbeSuccessCount: 0,
+				ProbeFailureCount: 0,
+				LastProbeTime:     time.Time{},
+			}
+			err = h.saveToRedis(host, &stat)
+			if err != nil {
+				logger.Error("Failed to initialize target in Redis",
+					zap.String("target", host), zap.Error(err))
 			} else {
-				h.targetStats[host] = &TargetStatus{
-					Rule:              ruleName,
-					URL:               rule.Target,
-					Protocol:          rule.Protocol,
-					RequestCount:      0,
-					SuccessCount:      0,
-					FailureCount:      0,
-					ProbeRequestCount: 0,
-					ProbeSuccessCount: 0,
-					ProbeFailureCount: 0,
-					LastProbeTime:     time.Time{},
-				}
-				logger.Info("Initialized new health check target",
+				logger.Info("Initialized new health check target in Redis",
 					zap.String("target", host),
 					zap.String("protocol", rule.Protocol),
 					zap.String("healthCheckPath", h.healthPaths[host]))
@@ -127,11 +181,142 @@ func (h *HealthChecker) RefreshTargets(cfg *config.Config) {
 		}
 	}
 	logger.Info("Health checker targets refreshed",
-		zap.Int("totalTargets", len(h.targetStats)))
+		zap.Int("totalTargets", len(h.healthPaths)))
 }
 
-// normalizeTarget 规范化目标地址
-func normalizeTarget(target config.RoutingRule) (string, error) {
+// saveToRedis 保存目标状态到 Redis
+func (h *HealthChecker) saveToRedis(target string, stat *TargetStatus) error {
+	key := GetHealthStatsKey(target)
+	data := map[string]interface{}{
+		"rule":                stat.Rule,
+		"url":                 stat.URL,
+		"protocol":            stat.Protocol,
+		"request_count":       stat.RequestCount,
+		"success_count":       stat.SuccessCount,
+		"cache_hit_count":     stat.CacheHitCount,
+		"failure_count":       stat.FailureCount,
+		"probe_request_count": stat.ProbeRequestCount,
+		"probe_success_count": stat.ProbeSuccessCount,
+		"probe_failure_count": stat.ProbeFailureCount,
+		"last_probe_time":     stat.LastProbeTime.Unix(),
+		"last_request_time":   stat.LastRequestTime.Unix(),
+	}
+	return cache.Client.HMSet(h.ctx, key, data).Err()
+}
+
+// loadFromRedis 从 Redis 加载目标状态
+func (h *HealthChecker) loadFromRedis(target string) (*TargetStatus, error) {
+	key := GetHealthStatsKey(target)
+	data, err := cache.Client.HGetAll(h.ctx, key).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	stat := &TargetStatus{
+		Rule:     data["rule"],
+		URL:      data["url"],
+		Protocol: data["protocol"],
+	}
+	if v, err := strconv.ParseInt(data["request_count"], 10, 64); err == nil {
+		stat.RequestCount = v
+	}
+	if v, err := strconv.ParseInt(data["success_count"], 10, 64); err == nil {
+		stat.SuccessCount = v
+	}
+	if v, err := strconv.ParseInt(data["cache_hit_count"], 10, 64); err == nil {
+		stat.CacheHitCount = v
+	}
+	if v, err := strconv.ParseInt(data["failure_count"], 10, 64); err == nil {
+		stat.FailureCount = v
+	}
+	if v, err := strconv.ParseInt(data["probe_request_count"], 10, 64); err == nil {
+		stat.ProbeRequestCount = v
+	}
+	if v, err := strconv.ParseInt(data["probe_success_count"], 10, 64); err == nil {
+		stat.ProbeSuccessCount = v
+	}
+	if v, err := strconv.ParseInt(data["probe_failure_count"], 10, 64); err == nil {
+		stat.ProbeFailureCount = v
+	}
+	if v, err := strconv.ParseInt(data["last_probe_time"], 10, 64); err == nil {
+		stat.LastProbeTime = time.Unix(v, 0)
+	}
+	if v, err := strconv.ParseInt(data["last_request_time"], 10, 64); err == nil {
+		stat.LastRequestTime = time.Unix(v, 0)
+	}
+	return stat, nil
+}
+
+// CheckCache 检查缓存是否存在并返回内容，同时更新缓存命中计数
+func (h *HealthChecker) CheckCache(ctx context.Context, method, path, target string) (string, bool) {
+	if cache.Client == nil {
+		logger.Warn("Redis client not initialized, skipping cache check")
+		return "", false
+	}
+
+	key := GetCacheKey(method, path)
+	content, err := cache.Client.Get(ctx, key).Result()
+	if err == redis.Nil {
+		logger.Debug("Cache miss", zap.String("key", key))
+		return "", false
+	} else if err != nil {
+		logger.Error("Failed to check cache", zap.Error(err), zap.String("key", key))
+		return "", false
+	}
+
+	// 更新缓存命中计数
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if stat, err := h.loadFromRedis(target); err == nil && stat != nil {
+		stat.CacheHitCount++
+		h.saveToRedis(target, stat)
+	}
+
+	logger.Debug("Cache hit", zap.String("key", key))
+	return content, true
+}
+
+// SetCache 设置缓存内容并指定过期时间
+func (h *HealthChecker) SetCache(ctx context.Context, method, path string, content string, ttl time.Duration) error {
+	if cache.Client == nil {
+		logger.Warn("Redis client not initialized, skipping cache set")
+		return fmt.Errorf("redis client not initialized")
+	}
+
+	key := GetCacheKey(method, path)
+	err := cache.Client.Set(ctx, key, content, ttl).Err()
+	if err != nil {
+		logger.Error("Failed to set cache", zap.Error(err), zap.String("key", key), zap.Duration("ttl", ttl))
+		return err
+	}
+
+	logger.Debug("Cache set successfully", zap.String("key", key), zap.Duration("ttl", ttl))
+	return nil
+}
+
+// IncrementRequestCount 增加指定路径的请求计数，返回当前计数
+func (h *HealthChecker) IncrementRequestCount(ctx context.Context, path string, ttl time.Duration) int64 {
+	key := GetPathReqCountKey(path)
+	script := redis.NewScript(`
+		local key = KEYS[1]
+		local ttl = ARGV[1]
+		local count = redis.call('INCR', key)
+		redis.call('EXPIRE', key, ttl)
+		return count
+	`)
+	count, err := script.Run(ctx, cache.Client, []string{key}, ttl.Seconds()).Int64()
+	if err != nil {
+		logger.Error("Failed to increment request count with Lua", zap.Error(err), zap.String("key", key))
+		return 0
+	}
+	return count
+}
+
+// NormalizeTarget 规范化目标地址
+func NormalizeTarget(target config.RoutingRule) (string, error) {
 	if target.Protocol == "grpc" {
 		return target.Target, nil
 	}
@@ -142,8 +327,8 @@ func normalizeTarget(target config.RoutingRule) (string, error) {
 	return u.Host, nil
 }
 
-// normalizeTargetHost 规范化目标主机地址
-func normalizeTargetHost(target string) (string, error) {
+// NormalizeTargetHost 规范化目标主机地址
+func NormalizeTargetHost(target string) (string, error) {
 	u, err := url.Parse(target)
 	if err != nil {
 		return target, err
@@ -153,7 +338,7 @@ func normalizeTargetHost(target string) (string, error) {
 
 // startHeartbeat 开始周期性心跳检测
 func (h *HealthChecker) startHeartbeat() {
-	ticker := time.NewTicker(1 * time.Second) // 初始 ticker，避免第一次等待
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -170,7 +355,7 @@ func (h *HealthChecker) startHeartbeat() {
 			h.mu.RUnlock()
 
 			h.performHeartbeatCheck()
-			ticker.Reset(heartbeatInterval) // 重置 ticker 以适应可能的配置变更
+			ticker.Reset(heartbeatInterval)
 		}
 	}
 }
@@ -181,13 +366,15 @@ func (h *HealthChecker) performHeartbeatCheck() {
 	defer h.mu.RUnlock()
 
 	logger.Info("Starting heartbeat check",
-		zap.Int("targetCount", len(h.targetStats)),
+		zap.Int("targetCount", len(h.healthPaths)),
 		zap.String("timestamp", time.Now().Format("2006-01-02 15:04:05")))
 
-	for target, stat := range h.targetStats {
-		healthPath, ok := h.healthPaths[target]
-		if !ok {
-			healthPath = "/health"
+	for target, healthPath := range h.healthPaths {
+		stat, err := h.loadFromRedis(target)
+		if err != nil || stat == nil {
+			logger.Warn("Failed to load target stats from Redis",
+				zap.String("target", target), zap.Error(err))
+			continue
 		}
 
 		now := time.Now()
@@ -205,6 +392,13 @@ func (h *HealthChecker) performHeartbeatCheck() {
 			logger.Warn("Unsupported protocol, skipping health check",
 				zap.String("protocol", stat.Protocol),
 				zap.String("target", target))
+		}
+
+		// 保存更新后的状态到 Redis
+		err = h.saveToRedis(target, stat)
+		if err != nil {
+			logger.Error("Failed to save target stats to Redis",
+				zap.String("target", target), zap.Error(err))
 		}
 	}
 }
@@ -314,18 +508,27 @@ func (h *HealthChecker) checkWebSocket(target, healthPath string, stat *TargetSt
 func (h *HealthChecker) UpdateRequestCount(target string, success bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	host, _ := normalizeTargetHost(target)
-	if stat, ok := h.targetStats[host]; ok {
-		stat.RequestCount++
-		if success {
-			stat.SuccessCount++
-		} else {
-			stat.FailureCount++
-		}
-		stat.LastRequestTime = time.Now()
+
+	host, _ := NormalizeTargetHost(target)
+	stat, err := h.loadFromRedis(host)
+	if err != nil || stat == nil {
+		logger.Warn("Target not found in Redis, unable to update request count",
+			zap.String("target", target), zap.Error(err))
+		return
+	}
+
+	stat.RequestCount++
+	if success {
+		stat.SuccessCount++
 	} else {
-		logger.Warn("Target not found, unable to update request count",
-			zap.String("target", target))
+		stat.FailureCount++
+	}
+	stat.LastRequestTime = time.Now()
+
+	err = h.saveToRedis(host, stat)
+	if err != nil {
+		logger.Error("Failed to update target stats in Redis",
+			zap.String("target", host), zap.Error(err))
 	}
 }
 
@@ -334,7 +537,11 @@ func (h *HealthChecker) ResetAllStats() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	for _, stat := range h.targetStats {
+	for target := range h.healthPaths {
+		stat, err := h.loadFromRedis(target)
+		if err != nil || stat == nil {
+			continue
+		}
 		stat.RequestCount = 0
 		stat.SuccessCount = 0
 		stat.FailureCount = 0
@@ -342,6 +549,11 @@ func (h *HealthChecker) ResetAllStats() {
 		stat.ProbeSuccessCount = 0
 		stat.ProbeFailureCount = 0
 		stat.LastProbeTime = time.Time{}
+		err = h.saveToRedis(target, stat)
+		if err != nil {
+			logger.Error("Failed to reset target stats in Redis",
+				zap.String("target", target), zap.Error(err))
+		}
 	}
 	logger.Info("All target stats reset")
 }
@@ -351,10 +563,19 @@ func (h *HealthChecker) GetAllStats() []TargetStatus {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	stats := make([]TargetStatus, 0, len(h.targetStats))
-	for _, stat := range h.targetStats {
-		stats = append(stats, *stat)
+	var stats []TargetStatus
+	for target := range h.healthPaths {
+		stat, err := h.loadFromRedis(target)
+		if err != nil {
+			logger.Error("Failed to load target stats from Redis",
+				zap.String("target", target), zap.Error(err))
+			continue
+		}
+		if stat != nil {
+			stats = append(stats, *stat)
+		}
 	}
+
 	sort.Slice(stats, func(i, j int) bool {
 		if stats[i].Protocol == stats[j].Protocol {
 			return stats[i].URL < stats[j].URL
