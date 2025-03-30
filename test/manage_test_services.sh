@@ -5,14 +5,14 @@
 
 # 定义服务文件路径
 HTTP_SERVICE="test/service/http/http_services.go"
-WEBSOCKET_SERVICE="test/service/websocket/websocket_service.go"
-GRPC_SERVICE="test/service/grpc/grpc_service.go"
+WEBSOCKET_SERVICE="test/service/websocket/websocket_services.go"
+GRPC_SERVICE="test/service/grpc/grpc_services.go"
 
 # 日志文件
 LOG_DIR="logs"
-HTTP_LOG="$LOG_DIR/http_service.log"
-WEBSOCKET_LOG="$LOG_DIR/websocket_service.log"
-GRPC_LOG="$LOG_DIR/grpc_service.log"
+HTTP_LOG="$LOG_DIR/http_services.log"
+WEBSOCKET_LOG="$LOG_DIR/websocket_services.log"
+GRPC_LOG="$LOG_DIR/grpc_services.log"
 
 # PID目录
 PID_DIR=".pids"

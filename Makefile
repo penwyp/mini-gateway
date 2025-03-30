@@ -139,15 +139,15 @@ manage-test-health:
 .PHONY: setup-consul
 setup-consul:
 	@echo "Checking if Consul is installed..."
-	@command -v consul >/dev/null 2>&1 || { echo "Consul not found. Please install Consul first."; exit 1; }
-	@echo "Starting Consul agent in dev mode..."
-	@consul agent -dev & \
-	sleep 2; \
+	@#command -v consul >/dev/null 2>&1 || { echo "Consul not found. Please install Consul first."; exit 1; }
+	@#echo "Starting Consul agent in dev mode..."
+	@#consul agent -dev & \
+#	sleep 2; \
 	echo "Pushing load balancer rules to Consul KV Store..."; \
-	curl -X PUT -d '{"/api/v1/user": ["http://localhost:8381", "http://localhost:8383"], "/api/v1/order": ["http://localhost:8382"]}' http://localhost:8500/v1/kv/gateway/loadbalancer/rules; \
+	curl -X PUT -d '{"/api/v1/user": ["http://localhost:8381", "http://localhost:8383"], "/api/v1/order": ["http://localhost:8382"]}' http://localhost:8300/v1/kv/gateway/loadbalancer/rules; \
 	echo "Consul test environment setup complete."; \
 	echo "Load balancer rules:"; \
-	curl http://localhost:8500/v1/kv/gateway/loadbalancer/rules?raw
+	curl http://localhost:8300/v1/kv/gateway/loadbalancer/rules?raw
 
 .PHONY: prepare-proto
 prepare-proto:
@@ -181,12 +181,18 @@ proto: prepare-proto
 		--plugin=protoc-gen-grpc-gateway=$(shell go env GOPATH)/bin/protoc-gen-grpc-gateway \
 		./proto/hello.proto
 
-# 设置 Grafana 配置
-.PHONY: setup-grafana
-setup-grafana:
+# 启动测试环境所有外部依赖
+.PHONY: start-test-env
+start-test-env:
+	@echo "Starting test environment..."
+	@echo "Starting Redis..."
+	@docker-compose -f test/docker/docker-compose.yml up -d mg-redis
+	@echo "Starting Consul..."
+	@docker-compose -f test/docker/docker-compose.yml up -d mg-consul
+	@echo "Starting monitoring(Grafana|Prometheus|Jaeger)..."
 	chmod +x test/docker/setup_grafana.sh
 	chmod +x test/docker/setup_monitoring.sh
-	@./test/docker/setup_grafana.sh
+	@./test/docker/setup_monitoring.sh
 
 # 启动监控服务
 .PHONY: setup-monitoring
@@ -195,8 +201,8 @@ setup-monitoring:
 	chmod +x test/docker/setup_monitoring.sh
 	@./test/docker/setup_monitoring.sh
 
-# 停止监控服务
-.PHONY: stop-monitoring
-stop-monitoring:
+# 停止外部依赖服务
+.PHONY: stop-test-env
+stop-test-env:
 	@docker-compose -f test/docker/docker-compose.yml down
-	@echo "监控服务已停止"
+	@echo "外部依赖服务已停止"

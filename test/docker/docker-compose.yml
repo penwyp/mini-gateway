@@ -4,10 +4,12 @@ services:
   mg-consul:
     image: consul:1.15
     container_name: mg-consul
+    command: agent -server -bootstrap-expect=1 -ui -client=0.0.0.0 -http-port=8300 -server-port=8754
     network_mode: host
-    command: "agent -server -bootstrap-expect=1 -ui -client=0.0.0.0 -bind=0.0.0.0 -http-port=8300"
     volumes:
       - consul-data:/consul/data
+    environment:
+      - CONSUL_BIND_INTERFACE=eth0  # 根据实际网卡名称调整
 
   mg-grafana:
     image: grafana/grafana:10.2.0
