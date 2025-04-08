@@ -201,3 +201,45 @@ func Breaker() gin.HandlerFunc {
 			zap.Duration("avgLatency", avgLatency))
 	}
 }
+
+// DisableBreakerHandler 处理关闭指定路径熔断器的请求
+func DisableBreakerHandler(c *gin.Context) {
+	var request struct {
+		Path string `json:"path" binding:"required"`
+	}
+
+	// 解析请求体
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: path is required"})
+		return
+	}
+
+	// 检查路径是否有效
+	cfg := config.GetConfig()
+	if _, exists := cfg.Routing.Rules[request.Path]; !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Path not found in routing rules"})
+		return
+	}
+
+	// 强制关闭熔断器
+	// Hystrix 不提供直接关闭熔断器的 API，可以通过重置统计数据来间接实现
+	hystrix.ConfigureCommand(request.Path, hystrix.CommandConfig{
+		Timeout:                cfg.Traffic.Breaker.Timeout,
+		MaxConcurrentRequests:  cfg.Traffic.Breaker.MaxConcurrent,
+		RequestVolumeThreshold: cfg.Traffic.Breaker.MinRequests,
+		SleepWindow:            cfg.Traffic.Breaker.SleepWindow,
+		ErrorPercentThreshold:  0, // 将错误阈值设为 0，避免触发熔断
+	})
+
+	// 记录操作
+	logger.Info("Circuit breaker disabled manually",
+		zap.String("path", request.Path),
+		zap.String("action", "disable"))
+
+	// 更新可观测性指标（可选）
+	errorRateGauge.WithLabelValues(request.Path).Set(0)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Circuit breaker disabled for path: " + request.Path,
+	})
+}

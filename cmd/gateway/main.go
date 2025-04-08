@@ -97,6 +97,9 @@ func (s *Server) setupRoutes(cfg *config.Config) {
 	s.Router.GET("/health", s.handleHealth) // 健康检查路由
 	s.Router.GET("/status", s.handleStatus) // 状态检查路由
 	s.Router.POST("/login", s.handleLogin)  // 登录路由
+	
+	// 添加关闭熔断器的 API
+	s.Router.POST("/breaker/disable", traffic.DisableBreakerHandler)
 
 	// Prometheus 监控路由
 	if cfg.Observability.Prometheus.Enabled {
